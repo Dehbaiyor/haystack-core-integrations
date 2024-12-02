@@ -54,9 +54,12 @@ meta = EXCLUDED.meta
 """
 
 KEYWORD_QUERY = """
-SELECT {table_name}.*, ts_rank_cd(to_tsvector(content_fts, query) AS score
-FROM {schema_name}.{table_name}, plainto_tsquery({language}, %s) query
-WHERE to_tsvector({language}, content) @@ query
+WITH query AS (
+    SELECT plainto_tsquery({language}, %s) as q
+)
+SELECT {table_name}.*, ts_rank_cd(content_fts, query.q) AS score
+FROM {schema_name}.{table_name}, query
+WHERE content_fts @@ query.q
 """
 
 VALID_VECTOR_FUNCTIONS = ["cosine_similarity", "inner_product", "l2_distance"]
@@ -323,6 +326,17 @@ class PgvectorDocumentStore:
 
         self._execute_sql(create_sql, error_msg="Could not create table in PgvectorDocumentStore")
 
+        # Add GIN index on meta JSONB column for faster metadata filtering
+        create_meta_index_sql = SQL(
+            "CREATE INDEX IF NOT EXISTS {index_name} ON {schema_name}.{table_name} USING GIN (meta)"
+        ).format(
+            schema_name=Identifier(self.schema_name),
+            table_name=Identifier(self.table_name),
+            index_name=Identifier(f"{self.table_name}_meta_gin_idx")
+        )
+        
+        self._execute_sql(create_meta_index_sql, error_msg="Could not create meta GIN index")
+
     def delete_table(self):
         """
         Deletes the table used to store Haystack documents.
@@ -483,9 +497,19 @@ class PgvectorDocumentStore:
         docs = self._from_pg_to_haystack_documents(records)
         return docs
 
-    def write_documents(self, documents: List[Document], policy: DuplicatePolicy = DuplicatePolicy.NONE) -> int:
+    def write_documents(self, documents: List[Document], policy: DuplicatePolicy = DuplicatePolicy.NONE, batch_size: int = 1000) -> int:
         """
-        Writes documents to the document store.
+        Writes documents in batches to reduce memory usage and improve performance.
+        """
+        written_docs = 0
+        for i in range(0, len(documents), batch_size):
+            batch = documents[i:i + batch_size]
+            written_docs += self._write_document_batch(batch, policy)
+        return written_docs
+
+    def _write_document_batch(self, documents: List[Document], policy: DuplicatePolicy) -> int:
+        """
+        Writes a batch of documents to the document store.
 
         :param documents: A list of Documents to write to the document store.
         :param policy: The duplicate policy to use when writing documents.
