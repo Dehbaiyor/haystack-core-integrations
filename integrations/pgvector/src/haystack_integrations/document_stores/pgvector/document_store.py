@@ -57,9 +57,9 @@ KEYWORD_QUERY = """
 WITH query AS (
     SELECT plainto_tsquery({language}, %s) as q
 )
-SELECT {table_name}.*, ts_rank_cd(content_fts, query.q) AS score
+SELECT {table_name}.*, ts_rank_cd({table_name}.content_fts, query.q) AS score
 FROM {schema_name}.{table_name}, query
-WHERE content_fts @@ query.q
+WHERE {table_name}.content_fts @@ query.q
 """
 
 VALID_VECTOR_FUNCTIONS = ["cosine_similarity", "inner_product", "l2_distance"]
