@@ -27,6 +27,7 @@ CREATE_TABLE_STATEMENT = """
 CREATE TABLE IF NOT EXISTS {schema_name}.{table_name} (
 id VARCHAR(128) PRIMARY KEY,
 embedding VECTOR({embedding_dimension}),
+created_at TIMESTAMPTZ DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC'),
 content TEXT,
 content_fts TSVECTOR generated always as (to_tsvector({language}, content)) stored,
 dataframe JSONB,
@@ -615,6 +616,8 @@ class PgvectorDocumentStore:
             
             # Remove internal PG fields that shouldn't be part of the Document
             haystack_dict.pop("content_fts", None)
+            haystack_dict.pop("created_at", None)
+            haystack_dict.pop("updated_at", None)
             
             blob_data = haystack_dict.pop("blob_data")
             blob_meta = haystack_dict.pop("blob_meta")
