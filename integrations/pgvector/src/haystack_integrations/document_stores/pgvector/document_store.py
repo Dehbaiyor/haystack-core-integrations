@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS {schema_name}.{table_name} (
 id VARCHAR(128) PRIMARY KEY,
 embedding VECTOR({embedding_dimension}),
 content TEXT,
+content_fts TSVECTOR generated always as (to_tsvector({language}, content)) stored,
 dataframe JSONB,
 blob_data BYTEA,
 blob_meta JSONB,
@@ -53,7 +54,7 @@ meta = EXCLUDED.meta
 """
 
 KEYWORD_QUERY = """
-SELECT {table_name}.*, ts_rank_cd(to_tsvector({language}, content), query) AS score
+SELECT {table_name}.*, ts_rank_cd(to_tsvector(content_fts, query) AS score
 FROM {schema_name}.{table_name}, plainto_tsquery({language}, %s) query
 WHERE to_tsvector({language}, content) @@ query
 """
@@ -317,6 +318,7 @@ class PgvectorDocumentStore:
             schema_name=Identifier(self.schema_name),
             table_name=Identifier(self.table_name),
             embedding_dimension=SQLLiteral(self.embedding_dimension),
+            language=SQLLiteral(self.language),
         )
 
         self._execute_sql(create_sql, error_msg="Could not create table in PgvectorDocumentStore")
@@ -366,6 +368,8 @@ class PgvectorDocumentStore:
         Internal method to handle the HNSW index creation.
         It also sets the `hnsw.ef_search` parameter for queries if it is specified.
         """
+        if not self.hnsw_recreate_index_if_exists:
+            return
 
         if self.hnsw_ef_search:
             sql_set_hnsw_ef_search = SQL("SET hnsw.ef_search = {hnsw_ef_search}").format(
@@ -381,7 +385,7 @@ class PgvectorDocumentStore:
             ).fetchone()
         )
 
-        if index_exists and not self.hnsw_recreate_index_if_exists:
+        if index_exists:
             logger.warning(
                 "HNSW index already exists and won't be recreated. "
                 "If you want to recreate it, pass 'hnsw_recreate_index_if_exists=True' to the "
