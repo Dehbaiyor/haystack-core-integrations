@@ -604,10 +604,13 @@ class PgvectorDocumentStore:
         """
         Internal method to convert a list of dictionaries from pgvector to a list of Haystack Documents.
         """
-
         haystack_documents = []
         for document in documents:
             haystack_dict = dict(document)
+            
+            # Remove internal PG fields that shouldn't be part of the Document
+            haystack_dict.pop("content_fts", None)
+            
             blob_data = haystack_dict.pop("blob_data")
             blob_meta = haystack_dict.pop("blob_meta")
             blob_mime_type = haystack_dict.pop("blob_mime_type")
