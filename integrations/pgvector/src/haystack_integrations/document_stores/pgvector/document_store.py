@@ -307,7 +307,11 @@ class PgvectorDocumentStore:
             result = cursor.execute(sql_query, params)
         except Error as e:
             self.connection.rollback()
-            detailed_error_msg = f"{error_msg}.\nYou can find the SQL query and the parameters in the debug logs."
+            detailed_error_msg = (
+                f"{error_msg}.\n"
+                f"SQL Error: {str(e)}\n"
+                "You can find the SQL query and the parameters in the debug logs."
+            )
             raise DocumentStoreError(detailed_error_msg) from e
 
         return result
@@ -549,11 +553,12 @@ class PgvectorDocumentStore:
             raise DuplicateDocumentError from ie
         except Error as e:
             self.connection.rollback()
-            error_msg = (
-                "Could not write documents to PgvectorDocumentStore. \n"
+            detailed_error_msg = (
+                f"Could not write documents to PgvectorDocumentStore. \n"
+                f"SQL Error: {str(e)}\n"
                 "You can find the SQL query and the parameters in the debug logs."
             )
-            raise DocumentStoreError(error_msg) from e
+            raise DocumentStoreError(detailed_error_msg) from e
 
         # get the number of the inserted documents, inspired by psycopg3 docs
         # https://www.psycopg.org/psycopg3/docs/api/cursors.html#psycopg.Cursor.executemany
