@@ -70,6 +70,7 @@ class AzureAISearchDocumentStore:
         embedding_dimension: int = 768,
         metadata_fields: Optional[Dict[str, type]] = None,
         vector_search_configuration: VectorSearch = None,
+        embedding_field: str = "embedding",
         **index_creation_kwargs,
     ):
         """
@@ -116,6 +117,7 @@ class AzureAISearchDocumentStore:
         self._metadata_fields = metadata_fields
         self._vector_search_configuration = vector_search_configuration or DEFAULT_VECTOR_SEARCH
         self._index_creation_kwargs = index_creation_kwargs
+        self._embedding_field = embedding_field
 
     @property
     def client(self) -> SearchClient:
@@ -444,7 +446,7 @@ class AzureAISearchDocumentStore:
             msg = "query_embedding must be a non-empty list of floats"
             raise ValueError(msg)
 
-        vector_query = VectorizedQuery(vector=query_embedding, k_nearest_neighbors=top_k, fields="embedding")
+        vector_query = VectorizedQuery(vector=query_embedding, k_nearest_neighbors=top_k, fields=self._embedding_field)
         result = self.client.search(vector_queries=[vector_query], filter=filters, **kwargs)
         azure_docs = list(result)
         return self._convert_search_result_to_documents(azure_docs)
@@ -514,7 +516,7 @@ class AzureAISearchDocumentStore:
             msg = "query_embedding must be a non-empty list of floats"
             raise ValueError(msg)
 
-        vector_query = VectorizedQuery(vector=query_embedding, k_nearest_neighbors=top_k, fields="embedding")
+        vector_query = VectorizedQuery(vector=query_embedding, k_nearest_neighbors=top_k, fields=self._embedding_field)
         result = self.client.search(
             search_text=query,
             vector_queries=[vector_query],
