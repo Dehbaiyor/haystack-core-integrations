@@ -138,12 +138,18 @@ def _equal(field: str, value: Any) -> Tuple[str, Any]:
     if value is None:
         # NO_VALUE is a placeholder that will be removed in _convert_filters_to_where_clause_and_params
         return f"{field} IS NULL", NO_VALUE
+    # Make string comparisons case-insensitive
+    if isinstance(value, str):
+        return f"LOWER({field}) = LOWER(%s)", value
     return f"{field} = %s", value
 
 
 def _not_equal(field: str, value: Any) -> Tuple[str, Any]:
     # we use IS DISTINCT FROM to correctly handle NULL values
     # (not handled by !=)
+    # Make string comparisons case-insensitive
+    if isinstance(value, str):
+        return f"LOWER({field}) IS DISTINCT FROM LOWER(%s)", value
     return f"{field} IS DISTINCT FROM %s", value
 
 
@@ -220,6 +226,9 @@ def _not_in(field: str, value: Any) -> Tuple[str, List]:
         msg = f"{field}'s value must be a list when using 'not in' comparator in Pinecone"
         raise FilterError(msg)
 
+    # Make string comparisons case-insensitive
+    if value and isinstance(value[0], str):
+        return f"{field} IS NULL OR LOWER({field}) != ALL(ARRAY(SELECT LOWER(unnest(%s))))", [value]
     return f"{field} IS NULL OR {field} != ALL(%s)", [value]
 
 
@@ -227,8 +236,10 @@ def _in(field: str, value: Any) -> Tuple[str, List]:
     if not isinstance(value, list):
         msg = f"{field}'s value must be a list when using 'in' comparator in Pinecone"
         raise FilterError(msg)
-
     # see https://www.psycopg.org/psycopg3/docs/basic/adapt.html#lists-adaptation
+    # Make string comparisons case-insensitive
+    if value and isinstance(value[0], str):
+        return f"LOWER({field}) = ANY(ARRAY(SELECT LOWER(unnest(%s))))", [value]
     return f"{field} = ANY(%s)", [value]
 
 
