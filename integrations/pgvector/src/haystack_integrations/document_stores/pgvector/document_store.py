@@ -371,7 +371,7 @@ class PgvectorDocumentStore:
         )
 
         sql_create_index = SQL(
-            "CREATE INDEX {index_name} ON {schema_name}.{table_name} USING GIN (to_tsvector({language}, content))"
+            "CREATE INDEX {index_name} ON {schema_name}.{table_name} USING GIN (content_fts)"
         ).format(
             schema_name=Identifier(self.schema_name),
             index_name=Identifier(self.keyword_index_name),
