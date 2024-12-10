@@ -20,6 +20,7 @@ from psycopg.types.json import Jsonb
 from pgvector.psycopg import register_vector
 
 from .filters import _convert_filters_to_where_clause_and_params
+from tqdm.auto import tqdm
 
 logger = logging.getLogger(__name__)
 
@@ -331,6 +332,16 @@ class PgvectorDocumentStore:
 
         self._execute_sql(create_sql, error_msg="Could not create table in PgvectorDocumentStore")
 
+        # Add index on id column for faster filtering
+        create_id_index_sql = SQL(
+            "CREATE INDEX IF NOT EXISTS {index_name} ON {schema_name}.{table_name} (id)"
+        ).format(
+            schema_name=Identifier(self.schema_name),
+            table_name=Identifier(self.table_name),
+            index_name=Identifier(f"{self.table_name}_id_idx")
+        )
+        self._execute_sql(create_id_index_sql, error_msg="Could not create id index")
+
         # Add GIN index on meta JSONB column for faster metadata filtering
         create_meta_index_sql = SQL(
             "CREATE INDEX IF NOT EXISTS {index_name} ON {schema_name}.{table_name} USING GIN (meta)"
@@ -505,11 +516,19 @@ class PgvectorDocumentStore:
     def write_documents(self, documents: List[Document], policy: DuplicatePolicy = DuplicatePolicy.NONE, batch_size: int = 1000) -> int:
         """
         Writes documents in batches to reduce memory usage and improve performance.
+
+        :param documents: List of documents to write to the document store
+        :param policy: Policy to handle duplicate documents. Can be 'FAIL', 'SKIP', or 'OVERWRITE'
+        :param batch_size: Number of documents to write at a time
+        :return: Number of documents written successfully
         """
         written_docs = 0
-        for i in range(0, len(documents), batch_size):
-            batch = documents[i:i + batch_size]
-            written_docs += self._write_document_batch(batch, policy)
+        with tqdm(total=len(documents), desc="Writing documents") as pbar:
+            for i in range(0, len(documents), batch_size):
+                batch = documents[i:i + batch_size]
+                docs_written = self._write_document_batch(batch, policy)
+                written_docs += docs_written
+                pbar.update(len(batch))
         return written_docs
 
     def _write_document_batch(self, documents: List[Document], policy: DuplicatePolicy) -> int:
