@@ -81,7 +81,7 @@ class LangfuseSpan(Span):
         if not tracer.is_content_tracing_enabled:
             return
         if key.endswith(".input"):
-            if "messages" in value:
+            if "messages" in value and value["messages"] is not None:
                 messages = [_convert_message_to_openai_format(m) for m in value["messages"]]
                 self._span.update(input=messages)
             else:
