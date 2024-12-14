@@ -140,17 +140,24 @@ class PgvectorHybridRetriever:
         query_embedding: List[float],
         filters: Optional[Dict[str, Any]] = None,
         top_k: Optional[int] = None,
+        embedding_weight: float = 0.5,
         vector_function: Optional[Literal["cosine_similarity", "inner_product", "l2_distance"]] = None,
+        weight_field: Optional[str] = None,
+        default_weight: float = 1.0,
     ):
         """
-        Retrieve documents from the `PgvectorDocumentStore`, based on their embeddings.
+        Retrieve documents from the `PgvectorDocumentStore`, based on their query and embeddings.
 
+        :param query: The query to search for.
         :param query_embedding: Embedding of the query.
         :param filters: Filters applied to the retrieved Documents. The way runtime filters are applied depends on
                         the `filter_policy` chosen at retriever initialization. See init method docstring for more
                         details.
         :param top_k: Maximum number of Documents to return.
         :param vector_function: The similarity function to use when searching for similar embeddings.
+        :param embedding_weight: The weight of the embedding similarity in the hybrid retrieval.
+        :param weight_field: The field in the document metadata that contains the weight.
+        :param default_weight: The default weight to use if the weight field is not present.
 
         :returns: List of Documents similar to `query_embedding`.
         """
@@ -163,6 +170,9 @@ class PgvectorHybridRetriever:
             query_embedding=query_embedding,
             filters=filters,
             top_k=top_k,
+            embedding_weight=embedding_weight,
             vector_function=vector_function,
+            weight_field=weight_field,
+            default_weight=default_weight,
         )
         return {"documents": docs}
