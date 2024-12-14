@@ -814,6 +814,8 @@ class PgvectorDocumentStore:
         top_k: int = 10,
         embedding_weight: float = 0.5,
         vector_function: Optional[Literal["cosine_similarity", "inner_product", "l2_distance"]] = None,
+        weight_field: Optional[str] = None,
+        default_weight: float = 1.0,
     ) -> List[Document]:
         """
         Retrieves documents using both embedding similarity and keyword search, combining the scores in a single query.
@@ -832,6 +834,10 @@ class PgvectorDocumentStore:
         :param embedding_weight: Weight given to embedding similarity (between 0 and 1).
             Keyword similarity weight will be (1 - embedding_weight)
         :param vector_function: Optional override for the vector similarity function
+        :param weight_field: Optional name of the field in document.meta to use as document weight.
+            The field should contain a numeric value. Higher values will boost document scores.
+        :param default_weight: Default weight to use when weight_field is specified but not found in a document's metadata.
+            Defaults to 1.0 (neutral weight).
         :returns: List of Documents that are most similar to both query_embedding and query_string
         """
         if not 0 <= embedding_weight <= 1:
@@ -840,6 +846,15 @@ class PgvectorDocumentStore:
 
         # Use pure keyword search when embedding_weight is 0
         if embedding_weight == 0:
+            if weight_field:
+                # Add weight to keyword search
+                return self._keyword_retrieval_with_weight(
+                    query=query,
+                    filters=filters,
+                    top_k=top_k,
+                    weight_field=weight_field,
+                    default_weight=default_weight
+                )
             return self._keyword_retrieval(
                 query=query,
                 filters=filters,
@@ -859,6 +874,16 @@ class PgvectorDocumentStore:
 
         # Use pure embedding search when embedding_weight is 1
         if embedding_weight == 1:
+            if weight_field:
+                # Add weight to embedding search
+                return self._embedding_retrieval_with_weight(
+                    query_embedding=query_embedding,
+                    filters=filters,
+                    top_k=top_k,
+                    vector_function=vector_function,
+                    weight_field=weight_field,
+                    default_weight=default_weight
+                )
             return self._embedding_retrieval(
                 query_embedding=query_embedding,
                 filters=filters,
@@ -884,6 +909,16 @@ class PgvectorDocumentStore:
         else:  # l2_distance
             embedding_score = f"(1 / (1 + (embedding <-> {query_embedding_for_postgres})))"
 
+        # Build the weight extraction expression if weight_field is specified
+        weight_expr = SQL("")
+        if weight_field:
+            # Extract weight from meta JSONB, defaulting to default_weight if not found
+            # Cast to float8 to ensure proper numeric handling
+            weight_expr = SQL(" * COALESCE((meta->>{weight_field})::float8, {default_weight})").format(
+                weight_field=SQLLiteral(weight_field),
+                default_weight=SQLLiteral(default_weight)
+            )
+
         # Combine embedding and keyword scores with weights in a single query
         sql_select = SQL("""
             WITH query AS (
@@ -892,8 +927,8 @@ class PgvectorDocumentStore:
             scores AS (
                 SELECT 
                     *,
-                    {embedding_score} * {embedding_weight} + 
-                    COALESCE(ts_rank_cd(content_fts, query.q, 32) * {keyword_weight}, 0) as score
+                    ({embedding_score} * {embedding_weight} + 
+                    COALESCE(ts_rank_cd(content_fts, query.q, 32) * {keyword_weight}, 0)){weight_expr} as score
                 FROM {schema_name}.{table_name}, query
                 WHERE (content_fts @@ query.q OR %s = '')  -- Include all docs if query is empty
             )
@@ -905,6 +940,7 @@ class PgvectorDocumentStore:
             embedding_score=SQL(embedding_score),
             embedding_weight=SQLLiteral(embedding_weight),
             keyword_weight=SQLLiteral(1 - embedding_weight),
+            weight_expr=weight_expr
         )
 
         # Add filters if provided
@@ -929,6 +965,120 @@ class PgvectorDocumentStore:
         )
 
         # Convert results to documents
+        records = result.fetchall()
+        docs = self._from_pg_to_haystack_documents(records)
+        return docs
+
+    def _keyword_retrieval_with_weight(
+        self,
+        query: str,
+        *,
+        filters: Optional[Dict[str, Any]] = None,
+        top_k: int = 10,
+        weight_field: str,
+        default_weight: float = 1.0,
+    ) -> List[Document]:
+        """
+        Retrieves documents using keyword search with document weights from metadata.
+        """
+        if not query:
+            msg = "query must be a non-empty string"
+            raise ValueError(msg)
+
+        sql_select = SQL("""
+            WITH query AS (
+                SELECT plainto_tsquery({language}, %s) as q
+            )
+            SELECT *, 
+                ts_rank_cd({table_name}.content_fts, query.q, 32) * 
+                COALESCE((meta->>{weight_field})::float8, {default_weight}) AS score
+            FROM {schema_name}.{table_name}, query
+            WHERE {table_name}.content_fts @@ query.q
+        """).format(
+            schema_name=Identifier(self.schema_name),
+            table_name=Identifier(self.table_name),
+            language=SQLLiteral(self.language),
+            weight_field=SQLLiteral(weight_field),
+            default_weight=SQLLiteral(default_weight),
+        )
+
+        where_params = (query,)
+        sql_where_clause = SQL("")
+        if filters:
+            sql_where_clause, filter_params = _convert_filters_to_where_clause_and_params(
+                filters=filters, operator="AND"
+            )
+            where_params = where_params + filter_params
+
+        sql_sort = SQL(" ORDER BY score DESC LIMIT {top_k}").format(top_k=SQLLiteral(top_k))
+        sql_query = sql_select + sql_where_clause + sql_sort
+
+        result = self._execute_sql(
+            sql_query,
+            where_params,
+            error_msg="Could not retrieve documents from PgvectorDocumentStore.",
+            cursor=self.dict_cursor,
+        )
+
+        records = result.fetchall()
+        docs = self._from_pg_to_haystack_documents(records)
+        return docs
+
+    def _embedding_retrieval_with_weight(
+        self,
+        query_embedding: List[float],
+        *,
+        filters: Optional[Dict[str, Any]] = None,
+        top_k: int = 10,
+        vector_function: Optional[Literal["cosine_similarity", "inner_product", "l2_distance"]] = None,
+        weight_field: str,
+        default_weight: float = 1.0,
+    ) -> List[Document]:
+        """
+        Retrieves documents using embedding similarity with document weights from metadata.
+        """
+        vector_function = vector_function or self.vector_function
+        if vector_function not in VALID_VECTOR_FUNCTIONS:
+            msg = f"vector_function must be one of {VALID_VECTOR_FUNCTIONS}, but got {vector_function}"
+            raise ValueError(msg)
+
+        # the vector must be a string with this format: "'[3,1,2]'"
+        query_embedding_for_postgres = f"'[{','.join(str(el) for el in query_embedding)}]'"
+
+        # Define the score based on vector function
+        if vector_function == "cosine_similarity":
+            score_definition = f"(1 - (embedding <=> {query_embedding_for_postgres})) * COALESCE((meta->>{weight_field})::float8, {default_weight}) AS score"
+        elif vector_function == "inner_product":
+            score_definition = f"((embedding <#> {query_embedding_for_postgres}) * -1) * COALESCE((meta->>{weight_field})::float8, {default_weight}) AS score"
+        elif vector_function == "l2_distance":
+            # For L2 distance, we want to keep the ordering (smaller distances = better)
+            # So we multiply by weight after converting to similarity score
+            score_definition = f"(1 / (1 + (embedding <-> {query_embedding_for_postgres}))) * COALESCE((meta->>{weight_field})::float8, {default_weight}) AS score"
+
+        sql_select = SQL("SELECT *, {score} FROM {schema_name}.{table_name}").format(
+            schema_name=Identifier(self.schema_name),
+            table_name=Identifier(self.table_name),
+            score=SQL(score_definition),
+        )
+
+        sql_where_clause = SQL("")
+        params = ()
+        if filters:
+            sql_where_clause, params = _convert_filters_to_where_clause_and_params(filters)
+
+        sql_sort = SQL(" ORDER BY score DESC LIMIT {top_k}").format(
+            top_k=SQLLiteral(top_k),
+        )
+
+        sql_query = sql_select + sql_where_clause + sql_sort
+
+        result = self._execute_sql(
+            sql_query,
+            params,
+            error_msg="Could not retrieve documents from PgvectorDocumentStore.",
+            cursor=self.dict_cursor,
+        )
+
         records = result.fetchall()
         docs = self._from_pg_to_haystack_documents(records)
         return docs
