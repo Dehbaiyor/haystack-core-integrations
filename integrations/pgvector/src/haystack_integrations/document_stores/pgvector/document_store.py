@@ -638,11 +638,21 @@ class PgvectorDocumentStore:
             haystack_dict.pop("created_at", None)
             haystack_dict.pop("updated_at", None)
             
-            # Get score and meta
-            score = haystack_dict.pop("score", None)
+            # Get scores and meta
             meta = haystack_dict.pop("meta", {})
+            
+            # Store all available scores in meta
+            score = haystack_dict.pop("score", None)
             if score is not None:
                 meta["score"] = score
+            
+            embedding_score = haystack_dict.pop("embedding_score", None)
+            if embedding_score is not None:
+                meta["embedding_score"] = embedding_score
+            
+            keyword_score = haystack_dict.pop("keyword_score", None)
+            if keyword_score is not None:
+                meta["keyword_score"] = keyword_score
             
             blob_data = haystack_dict.pop("blob_data")
             blob_meta = haystack_dict.pop("blob_meta")
@@ -933,6 +943,8 @@ class PgvectorDocumentStore:
             scores AS (
                 SELECT 
                     *,
+                    {embedding_score} as embedding_score,
+                    COALESCE(ts_rank_cd(content_fts, query.q, 32), 0) as keyword_score,
                     ({embedding_score} * {embedding_weight} + 
                     COALESCE(ts_rank_cd(content_fts, query.q, 32) * {keyword_weight}, 0)){weight_expr} as score
                 FROM {schema_name}.{table_name}, query
