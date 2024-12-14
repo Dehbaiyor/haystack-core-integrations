@@ -638,6 +638,12 @@ class PgvectorDocumentStore:
             haystack_dict.pop("created_at", None)
             haystack_dict.pop("updated_at", None)
             
+            # Get score and meta
+            score = haystack_dict.pop("score", None)
+            meta = haystack_dict.pop("meta", {})
+            if score is not None:
+                meta["score"] = score
+            
             blob_data = haystack_dict.pop("blob_data")
             blob_meta = haystack_dict.pop("blob_meta")
             blob_mime_type = haystack_dict.pop("blob_mime_type")
@@ -647,7 +653,7 @@ class PgvectorDocumentStore:
             if document.get("embedding") is not None:
                 haystack_dict["embedding"] = document["embedding"].tolist()
 
-            haystack_document = Document.from_dict(haystack_dict)
+            haystack_document = Document.from_dict({**haystack_dict, "meta": meta})
 
             if blob_data:
                 blob = ByteStream(data=blob_data, meta=blob_meta, mime_type=blob_mime_type)
