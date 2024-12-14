@@ -634,7 +634,7 @@ class PgvectorDocumentStore:
         for document in documents:
             haystack_dict = dict(document)
             blob_data = haystack_dict.pop("blob_data")
-            blob_meta = haystack_dict.pop("blob_meta")
+            blob_meta = haystack_dict.pop("blob_meta") or {}
             blob_mime_type = haystack_dict.pop("blob_mime_type")
 
             # Remove internal PG fields that shouldn't be part of the Document
