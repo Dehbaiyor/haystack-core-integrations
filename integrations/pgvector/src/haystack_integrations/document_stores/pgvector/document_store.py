@@ -641,6 +641,7 @@ class PgvectorDocumentStore:
             haystack_dict.pop("content_fts", None)
             haystack_dict.pop("created_at", None)
             haystack_dict.pop("updated_at", None)
+            haystack_dict.pop("q", None)  # Remove the query field from CTE in hybrid retrieval
 
             embedding_score = haystack_dict.pop("embedding_score", None)
             if embedding_score is not None:
