@@ -946,7 +946,7 @@ class PgvectorDocumentStore:
                     {embedding_score} as embedding_score,
                     COALESCE(ts_rank_cd(content_fts, query.q, 32), 0) as keyword_score,
                     ({embedding_score} * {embedding_weight} + 
-                    COALESCE(ts_rank_cd(content_fts, query.q, 32) * {keyword_weight}, 0)){weight_expr} as score
+                    COALESCE(ts_rank_cd(content_fts, query.q, 32) * {keyword_weight}, 0)){weight_expr} AS score
                 FROM {schema_name}.{table_name}, query
                 WHERE (content_fts @@ query.q OR %s = '')  -- Include all docs if query is empty
             )
