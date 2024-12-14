@@ -59,7 +59,7 @@ KEYWORD_QUERY = """
 WITH query AS (
     SELECT plainto_tsquery({language}, %s) as q
 )
-SELECT {table_name}.*, ts_rank_cd({table_name}.content_fts, query.q) AS score
+SELECT {table_name}.*, ts_rank_cd({table_name}.content_fts, query.q, 32) AS score
 FROM {schema_name}.{table_name}, query
 WHERE {table_name}.content_fts @@ query.q
 """
@@ -801,6 +801,134 @@ class PgvectorDocumentStore:
             cursor=self.dict_cursor,
         )
 
+        records = result.fetchall()
+        docs = self._from_pg_to_haystack_documents(records)
+        return docs
+
+    def _hybrid_retrieval(
+        self,
+        query: str,
+        query_embedding: List[float],
+        *,
+        filters: Optional[Dict[str, Any]] = None,
+        top_k: int = 10,
+        embedding_weight: float = 0.5,
+        vector_function: Optional[Literal["cosine_similarity", "inner_product", "l2_distance"]] = None,
+    ) -> List[Document]:
+        """
+        Retrieves documents using both embedding similarity and keyword search, combining the scores in a single query.
+        When embedding_weight is 1, only embedding search is used.
+        When embedding_weight is 0, only keyword search is used.
+        Otherwise, both searches are combined with the specified weights.
+
+        This method is not meant to be part of the public interface of
+        `PgvectorDocumentStore` and it should not be called directly.
+        `PgvectorHybridRetriever` uses this method directly and is the public interface for it.
+
+        :param query: The query string to use for keyword search
+        :param query_embedding: The query embedding to use for semantic search
+        :param filters: Optional filters to apply to the search
+        :param top_k: The number of documents to return
+        :param embedding_weight: Weight given to embedding similarity (between 0 and 1).
+            Keyword similarity weight will be (1 - embedding_weight)
+        :param vector_function: Optional override for the vector similarity function
+        :returns: List of Documents that are most similar to both query_embedding and query_string
+        """
+        if not 0 <= embedding_weight <= 1:
+            msg = "embedding_weight must be between 0 and 1"
+            raise ValueError(msg)
+
+        # Use pure keyword search when embedding_weight is 0
+        if embedding_weight == 0:
+            return self._keyword_retrieval(
+                query=query,
+                filters=filters,
+                top_k=top_k
+            )
+
+        # Validate embedding parameters since we'll need them for hybrid or pure embedding search
+        if not query_embedding:
+            msg = "query_embedding must be a non-empty list of floats"
+            raise ValueError(msg)
+        if len(query_embedding) != self.embedding_dimension:
+            msg = (
+                f"query_embedding dimension ({len(query_embedding)}) does not match PgvectorDocumentStore "
+                f"embedding dimension ({self.embedding_dimension})."
+            )
+            raise ValueError(msg)
+
+        # Use pure embedding search when embedding_weight is 1
+        if embedding_weight == 1:
+            return self._embedding_retrieval(
+                query_embedding=query_embedding,
+                filters=filters,
+                top_k=top_k,
+                vector_function=vector_function
+            )
+
+        # For weights between 0 and 1, use hybrid search
+        vector_function = vector_function or self.vector_function
+        if vector_function not in VALID_VECTOR_FUNCTIONS:
+            msg = f"vector_function must be one of {VALID_VECTOR_FUNCTIONS}, but got {vector_function}"
+            raise ValueError(msg)
+
+        # Format query embedding for PostgreSQL
+        query_embedding_for_postgres = f"'[{','.join(str(el) for el in query_embedding)}]'"
+
+        # Define embedding score based on vector function
+        # For l2_distance, we use 1/(1+distance) to convert to similarity score
+        if vector_function == "cosine_similarity":
+            embedding_score = f"(1 - (embedding <=> {query_embedding_for_postgres}))"
+        elif vector_function == "inner_product":
+            embedding_score = f"((embedding <#> {query_embedding_for_postgres}) * -1)"
+        else:  # l2_distance
+            embedding_score = f"(1 / (1 + (embedding <-> {query_embedding_for_postgres})))"
+
+        # Combine embedding and keyword scores with weights in a single query
+        sql_select = SQL("""
+            WITH query AS (
+                SELECT plainto_tsquery({language}, %s) as q
+            ),
+            scores AS (
+                SELECT 
+                    *,
+                    {embedding_score} * {embedding_weight} + 
+                    COALESCE(ts_rank_cd(content_fts, query.q, 32) * {keyword_weight}, 0) as score
+                FROM {schema_name}.{table_name}, query
+                WHERE (content_fts @@ query.q OR %s = '')  -- Include all docs if query is empty
+            )
+            SELECT * FROM scores
+        """).format(
+            schema_name=Identifier(self.schema_name),
+            table_name=Identifier(self.table_name),
+            language=SQLLiteral(self.language),
+            embedding_score=SQL(embedding_score),
+            embedding_weight=SQLLiteral(embedding_weight),
+            keyword_weight=SQLLiteral(1 - embedding_weight),
+        )
+
+        # Add filters if provided
+        params = [query, query]  # query is used twice in the SQL
+        sql_where_clause = SQL("")
+        if filters:
+            sql_where_clause, filter_params = _convert_filters_to_where_clause_and_params(filters)
+            params.extend(filter_params)
+
+        # Add sorting and limit
+        sql_sort = SQL(" ORDER BY score DESC LIMIT {top_k}").format(top_k=SQLLiteral(top_k))
+
+        # Combine all parts of the query
+        sql_query = sql_select + sql_where_clause + sql_sort
+
+        # Execute query
+        result = self._execute_sql(
+            sql_query,
+            tuple(params),
+            error_msg="Could not perform hybrid search in PgvectorDocumentStore.",
+            cursor=self.dict_cursor,
+        )
+
+        # Convert results to documents
         records = result.fetchall()
         docs = self._from_pg_to_haystack_documents(records)
         return docs
