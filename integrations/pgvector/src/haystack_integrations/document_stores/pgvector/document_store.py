@@ -629,41 +629,33 @@ class PgvectorDocumentStore:
         """
         Internal method to convert a list of dictionaries from pgvector to a list of Haystack Documents.
         """
+
         haystack_documents = []
         for document in documents:
             haystack_dict = dict(document)
-            
+            blob_data = haystack_dict.pop("blob_data")
+            blob_meta = haystack_dict.pop("blob_meta")
+            blob_mime_type = haystack_dict.pop("blob_mime_type")
+
             # Remove internal PG fields that shouldn't be part of the Document
             haystack_dict.pop("content_fts", None)
             haystack_dict.pop("created_at", None)
             haystack_dict.pop("updated_at", None)
-            
-            # Get scores and meta
-            meta = haystack_dict.pop("meta", {})
-            
-            # Store all available scores in meta
-            score = haystack_dict.pop("score", None)
-            if score is not None:
-                meta["score"] = score
-            
+
             embedding_score = haystack_dict.pop("embedding_score", None)
             if embedding_score is not None:
-                meta["embedding_score"] = embedding_score
+                blob_meta["embedding_score"] = embedding_score
             
             keyword_score = haystack_dict.pop("keyword_score", None)
             if keyword_score is not None:
-                meta["keyword_score"] = keyword_score
-            
-            blob_data = haystack_dict.pop("blob_data")
-            blob_meta = haystack_dict.pop("blob_meta")
-            blob_mime_type = haystack_dict.pop("blob_mime_type")
+                blob_meta["keyword_score"] = keyword_score
 
             # postgresql returns the embedding as a string
             # so we need to convert it to a list of floats
             if document.get("embedding") is not None:
                 haystack_dict["embedding"] = document["embedding"].tolist()
 
-            haystack_document = Document.from_dict({**haystack_dict, "meta": meta})
+            haystack_document = Document.from_dict(haystack_dict)
 
             if blob_data:
                 blob = ByteStream(data=blob_data, meta=blob_meta, mime_type=blob_mime_type)

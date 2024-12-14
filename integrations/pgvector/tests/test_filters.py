@@ -160,8 +160,8 @@ def test_logical_condition_nested():
     }
     query, values = _parse_logical_condition(condition)
     assert query == (
-        "((meta->>'domain' IS DISTINCT FROM %s OR meta->>'chapter' = ANY(%s)) "
-        "AND ((meta->>'number')::integer >= %s OR meta->>'author' IS NULL OR meta->>'author' != ALL(%s)))"
+        "((LOWER(meta->>'domain') IS DISTINCT FROM LOWER(%s) OR LOWER(meta->>'chapter') = ANY(ARRAY(SELECT LOWER(unnest(%s))))) "
+        "AND ((meta->>'number')::integer >= %s OR meta->>'author' IS NULL OR LOWER(meta->>'author') != ALL(ARRAY(SELECT LOWER(unnest(%s))))))"
     )
     assert values == ["science", [["intro", "conclusion"]], 90, [["John", "Jane"]]]
 
@@ -175,7 +175,7 @@ def test_convert_filters_to_where_clause_and_params():
         ],
     }
     where_clause, params = _convert_filters_to_where_clause_and_params(filters)
-    assert where_clause == SQL(" WHERE ") + SQL("((meta->>'number')::integer = %s AND meta->>'chapter' = %s)")
+    assert where_clause == SQL(" WHERE ") + SQL("((meta->>'number')::integer = %s AND LOWER(meta->>'chapter') = LOWER(%s))")
     assert params == (100, "intro")
 
 
@@ -188,5 +188,5 @@ def test_convert_filters_to_where_clause_and_params_handle_null():
         ],
     }
     where_clause, params = _convert_filters_to_where_clause_and_params(filters)
-    assert where_clause == SQL(" WHERE ") + SQL("(meta->>'number' IS NULL AND meta->>'chapter' = %s)")
+    assert where_clause == SQL(" WHERE ") + SQL("(meta->>'number' IS NULL AND LOWER(meta->>'chapter') = LOWER(%s))")
     assert params == ("intro",)
