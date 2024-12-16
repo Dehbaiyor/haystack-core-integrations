@@ -660,8 +660,10 @@ class PgvectorDocumentStore:
             # so we need to convert it to a list of floats
             if document.get("embedding") is not None:
                 if isinstance(document["embedding"], str):
-                    document["embedding"] = ast.literal_eval(document["embedding"])
-                haystack_dict["embedding"] = document["embedding"].tolist()
+                    haystack_dict["embedding"] = ast.literal_eval(document["embedding"])
+                else:
+                    haystack_dict["embedding"] = document["embedding"].tolist()
+
 
             haystack_document = Document.from_dict(haystack_dict)
 
