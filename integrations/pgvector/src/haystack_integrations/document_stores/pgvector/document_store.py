@@ -400,9 +400,6 @@ class PgvectorDocumentStore:
         Internal method to handle the HNSW index creation.
         It also sets the `hnsw.ef_search` parameter for queries if it is specified.
         """
-        if not self.hnsw_recreate_index_if_exists:
-            return
-
         if self.hnsw_ef_search:
             sql_set_hnsw_ef_search = SQL("SET hnsw.ef_search = {hnsw_ef_search}").format(
                 hnsw_ef_search=SQLLiteral(self.hnsw_ef_search)
@@ -417,7 +414,7 @@ class PgvectorDocumentStore:
             ).fetchone()
         )
 
-        if index_exists:
+        if index_exists and not self.hnsw_recreate_index_if_exists:
             logger.warning(
                 "HNSW index already exists and won't be recreated. "
                 "If you want to recreate it, pass 'hnsw_recreate_index_if_exists=True' to the "
