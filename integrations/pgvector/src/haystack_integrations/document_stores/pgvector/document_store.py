@@ -217,7 +217,7 @@ class PgvectorDocumentStore:
         connection.autocommit = True
         if self.create_extension:
             connection.execute("CREATE EXTENSION IF NOT EXISTS vector")
-        register_vector(connection, globally=True, arrays=True)  # Note: this must be called before creating the cursors.
+        register_vector(connection)  # Note: this must be called before creating the cursors.
 
         self._connection = connection
         self._cursor = self._connection.cursor()
