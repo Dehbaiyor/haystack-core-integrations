@@ -645,11 +645,11 @@ class PgvectorDocumentStore:
             haystack_dict.pop("updated_at", None)
             haystack_dict.pop("q", None)  # Remove the query field from CTE in hybrid retrieval
 
-            embedding_score = haystack_dict.pop("embedding_score", None)
+            embedding_score = haystack_dict.pop("embedding_rank", None)
             if embedding_score is not None:
                 blob_meta["embedding_score"] = embedding_score
             
-            keyword_score = haystack_dict.pop("keyword_score", None)
+            keyword_score = haystack_dict.pop("keyword_rank", None)
             if keyword_score is not None:
                 blob_meta["keyword_score"] = keyword_score
 
@@ -939,17 +939,41 @@ class PgvectorDocumentStore:
             WITH query AS (
                 SELECT plainto_tsquery({language}, %s) as q
             ),
-            scores AS (
+            embedding_candidates AS (
                 SELECT 
-                    *,
+                    id,
                     {embedding_score} as embedding_score,
-                    COALESCE(ts_rank_cd(content_fts, query.q, 32), 0) as keyword_score,
-                    ({embedding_score} * {embedding_weight} + 
-                    COALESCE(ts_rank_cd(content_fts, query.q, 32) * {keyword_weight}, 0)){weight_expr} AS score
+                    ROW_NUMBER() OVER (ORDER BY {embedding_score} DESC) as embedding_rank
+                FROM {schema_name}.{table_name}
+                ORDER BY {embedding_score} DESC
+                -- Scale number of candidates by weight ratio
+                LIMIT CEIL({top_k} * 2 * ({embedding_weight} / {keyword_weight}))
+            ),
+            keyword_candidates AS (
+                SELECT 
+                    id,
+                    ts_rank_cd(content_fts, query.q, 32) as keyword_score,
+                    ROW_NUMBER() OVER (ORDER BY ts_rank_cd(content_fts, query.q, 32) DESC) as keyword_rank
                 FROM {schema_name}.{table_name}, query
-                WHERE (content_fts @@ query.q OR %s = '')  -- Include all docs if query is empty
+                WHERE content_fts @@ query.q
+                ORDER BY keyword_score DESC
+                LIMIT CEIL({top_k} * 2)
+            ),
+            final_scores AS (
+                SELECT 
+                    t.*,
+                    e.embedding_rank,
+                    k.keyword_rank,
+                    {embedding_weight} * (1 / (60 + COALESCE(e.embedding_rank, CEIL({top_k} * 2) + 1))) +
+                    {keyword_weight} * (1 / (60 + COALESCE(k.keyword_rank, CEIL({top_k} * 2) + 1))) as score
+                FROM {schema_name}.{table_name} t
+                LEFT JOIN embedding_candidates e ON t.id = e.id
+                LEFT JOIN keyword_candidates k ON t.id = k.id
+                WHERE e.id IS NOT NULL OR k.id IS NOT NULL
             )
-            SELECT * FROM scores
+            SELECT * FROM final_scores
+            ORDER BY score DESC
+            LIMIT {top_k}
         """).format(
             schema_name=Identifier(self.schema_name),
             table_name=Identifier(self.table_name),
@@ -957,7 +981,8 @@ class PgvectorDocumentStore:
             embedding_score=SQL(embedding_score),
             embedding_weight=SQLLiteral(embedding_weight),
             keyword_weight=SQLLiteral(1 - embedding_weight),
-            weight_expr=weight_expr
+            weight_expr=weight_expr,
+            top_k=SQLLiteral(top_k),
         )
 
         # Add filters if provided
