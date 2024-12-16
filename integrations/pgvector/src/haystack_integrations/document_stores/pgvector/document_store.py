@@ -332,16 +332,6 @@ class PgvectorDocumentStore:
 
         self._execute_sql(create_sql, error_msg="Could not create table in PgvectorDocumentStore")
 
-        # Add index on id column for faster filtering
-        create_id_index_sql = SQL(
-            "CREATE INDEX IF NOT EXISTS {index_name} ON {schema_name}.{table_name} (id)"
-        ).format(
-            schema_name=Identifier(self.schema_name),
-            table_name=Identifier(self.table_name),
-            index_name=Identifier(f"{self.table_name}_id_idx")
-        )
-        self._execute_sql(create_id_index_sql, error_msg="Could not create id index")
-
         # Add GIN index on meta JSONB column for faster metadata filtering
         create_meta_index_sql = SQL(
             "CREATE INDEX IF NOT EXISTS {index_name} ON {schema_name}.{table_name} USING GIN (meta)"
