@@ -415,7 +415,7 @@ class PgvectorDocumentStore:
         )
 
         if index_exists and not self.hnsw_recreate_index_if_exists:
-            logger.warning(
+            logger.debug(
                 "HNSW index already exists and won't be recreated. "
                 "If you want to recreate it, pass 'hnsw_recreate_index_if_exists=True' to the "
                 "Document Store constructor"
@@ -945,8 +945,6 @@ class PgvectorDocumentStore:
                     {embedding_score} as embedding_score,
                     ROW_NUMBER() OVER (ORDER BY {embedding_score} DESC) as embedding_rank
                 FROM {schema_name}.{table_name}
-                ORDER BY {embedding_score} DESC
-                -- Scale number of candidates by weight ratio
                 LIMIT CEIL({top_k} * 2 * ({embedding_weight} / {keyword_weight}))
             ),
             keyword_candidates AS (
@@ -956,24 +954,18 @@ class PgvectorDocumentStore:
                     ROW_NUMBER() OVER (ORDER BY ts_rank_cd(content_fts, query.q, 32) DESC) as keyword_rank
                 FROM {schema_name}.{table_name}, query
                 WHERE content_fts @@ query.q
-                ORDER BY keyword_score DESC
                 LIMIT CEIL({top_k} * 2)
-            ),
-            final_scores AS (
-                SELECT 
-                    t.*,
-                    e.embedding_rank,
-                    k.keyword_rank,
-                    {embedding_weight} * (1 / (60 + COALESCE(e.embedding_rank, CEIL({top_k} * 2) + 1))) +
-                    {keyword_weight} * (1 / (60 + COALESCE(k.keyword_rank, CEIL({top_k} * 2) + 1))) as score
-                FROM {schema_name}.{table_name} t
-                LEFT JOIN embedding_candidates e ON t.id = e.id
-                LEFT JOIN keyword_candidates k ON t.id = k.id
-                WHERE e.id IS NOT NULL OR k.id IS NOT NULL
             )
-            SELECT * FROM final_scores
-            ORDER BY score DESC
-            LIMIT {top_k}
+            SELECT 
+                t.*,
+                e.embedding_rank,
+                k.keyword_rank,
+                {embedding_weight} * (1 / (60 + COALESCE(e.embedding_rank, CEIL({top_k} * 2) + 1))) +
+                {keyword_weight} * (1 / (60 + COALESCE(k.keyword_rank, CEIL({top_k} * 2) + 1))) as score
+            FROM {schema_name}.{table_name} t
+            LEFT JOIN embedding_candidates e ON t.id = e.id
+            LEFT JOIN keyword_candidates k ON t.id = k.id
+            WHERE e.id IS NOT NULL OR k.id IS NOT NULL
         """).format(
             schema_name=Identifier(self.schema_name),
             table_name=Identifier(self.table_name),
@@ -986,7 +978,7 @@ class PgvectorDocumentStore:
         )
 
         # Add filters if provided
-        params = [query, query]  # query is used twice in the SQL
+        params = [query]  # query is only used once
         sql_where_clause = SQL("")
         if filters:
             sql_where_clause, filter_params = _convert_filters_to_where_clause_and_params(filters)
