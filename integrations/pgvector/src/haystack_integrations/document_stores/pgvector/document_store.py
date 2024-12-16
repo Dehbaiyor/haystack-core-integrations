@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 CREATE_TABLE_STATEMENT = """
 CREATE TABLE IF NOT EXISTS {schema_name}.{table_name} (
 id VARCHAR(128) PRIMARY KEY,
-embedding VECTOR({embedding_dimension}),
+embedding {vector_type}({embedding_dimension}),
 created_at TIMESTAMPTZ DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC'),
 content TEXT,
 content_fts TSVECTOR generated always as (to_tsvector({language}, content)) stored,
@@ -72,6 +72,12 @@ VECTOR_FUNCTION_TO_POSTGRESQL_OPS = {
     "l2_distance": "vector_l2_ops",
 }
 
+HALFVEC_VECTOR_FUNCTION_TO_POSTGRESQL_OPS = {
+    "cosine_similarity": "halfvec_cosine_ops",
+    "inner_product": "halfvec_ip_ops",
+    "l2_distance": "halfvec_l2_ops",
+}
+
 HNSW_INDEX_CREATION_VALID_KWARGS = ["m", "ef_construction"]
 
 
@@ -90,6 +96,7 @@ class PgvectorDocumentStore:
         language: str = "english",
         embedding_dimension: int = 768,
         vector_function: Literal["cosine_similarity", "inner_product", "l2_distance"] = "cosine_similarity",
+        vector_type: Literal["vector", "halfvec"] = "vector",
         recreate_table: bool = False,
         search_strategy: Literal["exact_nearest_neighbor", "hnsw"] = "exact_nearest_neighbor",
         hnsw_recreate_index_if_exists: bool = False,
@@ -128,6 +135,7 @@ class PgvectorDocumentStore:
             **Important**: when using the `"hnsw"` search strategy, an index will be created that depends on the
             `vector_function` passed here. Make sure subsequent queries will keep using the same
             vector similarity function in order to take advantage of the index.
+        :param vector_type: The type of vector to use for the embedding.
         :param recreate_table: Whether to recreate the table if it already exists.
         :param search_strategy: The search strategy to use when searching for similar embeddings.
             `"exact_nearest_neighbor"` provides perfect recall but can be slow for large numbers of documents.
@@ -157,6 +165,7 @@ class PgvectorDocumentStore:
             msg = f"vector_function must be one of {VALID_VECTOR_FUNCTIONS}, but got {vector_function}"
             raise ValueError(msg)
         self.vector_function = vector_function
+        self.vector_type = vector_type
         self.recreate_table = recreate_table
         self.search_strategy = search_strategy
         self.hnsw_recreate_index_if_exists = hnsw_recreate_index_if_exists
@@ -264,6 +273,7 @@ class PgvectorDocumentStore:
             table_name=self.table_name,
             embedding_dimension=self.embedding_dimension,
             vector_function=self.vector_function,
+            vector_type=self.vector_type,
             recreate_table=self.recreate_table,
             search_strategy=self.search_strategy,
             hnsw_recreate_index_if_exists=self.hnsw_recreate_index_if_exists,
@@ -326,6 +336,7 @@ class PgvectorDocumentStore:
         create_sql = SQL(CREATE_TABLE_STATEMENT).format(
             schema_name=Identifier(self.schema_name),
             table_name=Identifier(self.table_name),
+            vector_type=SQL(self.vector_type),
             embedding_dimension=SQLLiteral(self.embedding_dimension),
             language=SQLLiteral(self.language),
         )
@@ -422,8 +433,11 @@ class PgvectorDocumentStore:
         """
         Internal method to create the HNSW index.
         """
+        if self.vector_type == "halfvec":
+            pg_ops = HALFVEC_VECTOR_FUNCTION_TO_POSTGRESQL_OPS[self.vector_function]
+        else:
+            pg_ops = VECTOR_FUNCTION_TO_POSTGRESQL_OPS[self.vector_function]
 
-        pg_ops = VECTOR_FUNCTION_TO_POSTGRESQL_OPS[self.vector_function]
         actual_hnsw_index_creation_kwargs = {
             key: value
             for key, value in self.hnsw_index_creation_kwargs.items()
