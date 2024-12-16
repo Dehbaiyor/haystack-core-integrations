@@ -1093,3 +1093,12 @@ class PgvectorDocumentStore:
         records = result.fetchall()
         docs = self._from_pg_to_haystack_documents(records)
         return docs
+    
+
+    def create_index_on_meta_field(self, field: str):
+        sql_create_index = SQL("CREATE INDEX idx_{field} ON {schema_name}.{table_name} USING gin (meta->>{field})").format(
+            schema_name=Identifier(self.schema_name),
+            table_name=Identifier(self.table_name),
+            field=SQLLiteral(field),
+        )
+        self._execute_sql(sql_create_index, error_msg="Could not create index on meta field in PgvectorDocumentStore.")
