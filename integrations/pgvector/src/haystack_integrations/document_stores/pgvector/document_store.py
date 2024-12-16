@@ -1100,9 +1100,24 @@ class PgvectorDocumentStore:
     
 
     def create_index_on_meta_field(self, field: str):
-        sql_create_index = SQL("CREATE INDEX idx_{field} ON {schema_name}.{table_name} USING gin (meta->>{field})").format(
+        """
+        Creates a GIN index on a specific field in the meta JSONB column.
+        
+        :param field: Name of the field in the meta JSONB column to create an index on
+        """
+        # Use a consistent index naming convention
+        index_name = f"{self.table_name}_meta_{field}_idx"
+        
+        sql_create_index = SQL(
+            "CREATE INDEX IF NOT EXISTS {index_name} ON {schema_name}.{table_name} USING gin ((meta->{field}))"
+        ).format(
             schema_name=Identifier(self.schema_name),
             table_name=Identifier(self.table_name),
-            field=SQLLiteral(field),
+            index_name=Identifier(index_name),
+            field=SQLLiteral(field)
         )
-        self._execute_sql(sql_create_index, error_msg="Could not create index on meta field in PgvectorDocumentStore.")
+        
+        self._execute_sql(
+            sql_create_index, 
+            error_msg=f"Could not create index on meta field '{field}'"
+        )
