@@ -960,8 +960,9 @@ class PgvectorDocumentStore:
                 t.*,
                 e.embedding_rank,
                 k.keyword_rank,
-                {embedding_weight} * (1 / (60 + COALESCE(e.embedding_rank, CEIL({top_k} * 2) + 1))) +
-                {keyword_weight} * (1 / (60 + COALESCE(k.keyword_rank, CEIL({top_k} * 2) + 1))) as score
+                ({embedding_weight} * (1 / (60 + COALESCE(e.embedding_rank, CEIL({top_k} * 2) + 1))) +
+                {keyword_weight} * (1 / (60 + COALESCE(k.keyword_rank, CEIL({top_k} * 2) + 1)))) * 
+                COALESCE((meta->>{weight_field})::float8, {default_weight}) as score
             FROM {schema_name}.{table_name} t
             LEFT JOIN embedding_candidates e ON t.id = e.id
             LEFT JOIN keyword_candidates k ON t.id = k.id
@@ -973,7 +974,8 @@ class PgvectorDocumentStore:
             embedding_score=SQL(embedding_score),
             embedding_weight=SQLLiteral(embedding_weight),
             keyword_weight=SQLLiteral(1 - embedding_weight),
-            weight_expr=weight_expr,
+            weight_field=SQLLiteral(weight_field) if weight_field else SQL("''"),
+            default_weight=SQLLiteral(default_weight),
             top_k=SQLLiteral(top_k),
         )
 
