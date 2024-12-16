@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2023-present deepset GmbH <info@deepset.ai>
 #
 # SPDX-License-Identifier: Apache-2.0
+import ast
 import logging
 from typing import Any, Dict, List, Literal, Optional
 
@@ -658,6 +659,8 @@ class PgvectorDocumentStore:
             # postgresql returns the embedding as a string
             # so we need to convert it to a list of floats
             if document.get("embedding") is not None:
+                if isinstance(document["embedding"], str):
+                    document["embedding"] = ast.literal_eval(document["embedding"])
                 haystack_dict["embedding"] = document["embedding"].tolist()
 
             haystack_document = Document.from_dict(haystack_dict)
