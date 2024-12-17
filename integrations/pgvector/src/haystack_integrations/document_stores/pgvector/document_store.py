@@ -966,7 +966,6 @@ class PgvectorDocumentStore:
             FROM {schema_name}.{table_name} t
             LEFT JOIN embedding_candidates e ON t.id = e.id
             LEFT JOIN keyword_candidates k ON t.id = k.id
-            WHERE e.id IS NOT NULL OR k.id IS NOT NULL
         """).format(
             schema_name=Identifier(self.schema_name),
             table_name=Identifier(self.table_name),
