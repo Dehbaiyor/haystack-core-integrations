@@ -751,9 +751,21 @@ class PgvectorDocumentStore:
             cursor=self.dict_cursor,
         )
 
-        records = result.fetchall()
-        docs = self._from_pg_to_haystack_documents(records)
-        return docs
+        if not result:
+            logger.warning(f"Keyword query execution returned no result object for query - {sql_query}")
+            return []
+
+        try:
+            records = result.fetchall()
+            if not records:
+                logger.debug(f"No matching documents found for the keyword query - {sql_query}")
+                return []
+            
+            docs = self._from_pg_to_haystack_documents(records)
+            return docs
+        except Exception as e:
+            logger.error(f"Error fetching results from keyword query ({sql_query}): {str(e)}")
+            return []
 
     def _embedding_retrieval(
         self,
