@@ -136,7 +136,7 @@ class TestEmbeddingRetriever:
         res = retriever.run(query_embedding=[0.3, 0.5])
 
         mock_store._embedding_retrieval.assert_called_once_with(
-            query_embedding=[0.3, 0.5], filters={}, top_k=10, vector_function="l2_distance"
+            query_embedding=[0.3, 0.5], filters={}, top_k=10, vector_function="l2_distance", weight_field=None, default_weight=1.0
         )
 
         assert res == {"documents": [doc]}

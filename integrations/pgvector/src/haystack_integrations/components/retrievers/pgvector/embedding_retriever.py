@@ -140,6 +140,8 @@ class PgvectorEmbeddingRetriever:
         filters: Optional[Dict[str, Any]] = None,
         top_k: Optional[int] = None,
         vector_function: Optional[Literal["cosine_similarity", "inner_product", "l2_distance"]] = None,
+        weight_field: Optional[str] = None,
+        default_weight: float = 1.0,
     ):
         """
         Retrieve documents from the `PgvectorDocumentStore`, based on their embeddings.
@@ -150,6 +152,8 @@ class PgvectorEmbeddingRetriever:
                         details.
         :param top_k: Maximum number of Documents to return.
         :param vector_function: The similarity function to use when searching for similar embeddings.
+        :param weight_field: The field in the document metadata that contains the weight.
+        :param default_weight: The default weight to use if the weight field is not present.
 
         :returns: List of Documents similar to `query_embedding`.
         """
@@ -162,5 +166,7 @@ class PgvectorEmbeddingRetriever:
             filters=filters,
             top_k=top_k,
             vector_function=vector_function,
+            weight_field=weight_field,
+            default_weight=default_weight,
         )
         return {"documents": docs}
