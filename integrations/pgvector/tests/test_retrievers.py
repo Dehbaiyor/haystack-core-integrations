@@ -63,6 +63,7 @@ class TestEmbeddingRetriever:
                         "hnsw_index_name": "haystack_hnsw_index",
                         "hnsw_ef_search": None,
                         "keyword_index_name": "haystack_keyword_index",
+                        "vector_type": "vector"
                     },
                 },
                 "filters": {"field": "value"},
@@ -94,6 +95,7 @@ class TestEmbeddingRetriever:
                         "hnsw_index_name": "haystack_hnsw_index",
                         "hnsw_ef_search": None,
                         "keyword_index_name": "haystack_keyword_index",
+                        "vector_type": "vector"
                     },
                 },
                 "filters": {"field": "value"},
@@ -192,6 +194,7 @@ class TestKeywordRetriever:
                         "hnsw_index_name": "haystack_hnsw_index",
                         "hnsw_ef_search": None,
                         "keyword_index_name": "haystack_keyword_index",
+                        "vector_type": "vector"
                     },
                 },
                 "filters": {"field": "value"},
@@ -222,6 +225,7 @@ class TestKeywordRetriever:
                         "hnsw_index_name": "haystack_hnsw_index",
                         "hnsw_ef_search": None,
                         "keyword_index_name": "haystack_keyword_index",
+                        "vector_type": "vector"
                     },
                 },
                 "filters": {"field": "value"},
@@ -271,6 +275,7 @@ class TestKeywordRetriever:
                         "hnsw_index_name": "haystack_hnsw_index",
                         "hnsw_ef_search": None,
                         "keyword_index_name": "haystack_keyword_index",
+                        "vector_type": "vector"
                     },
                 },
                 "filters": {"field": "value"},

@@ -129,6 +129,7 @@ def test_to_dict(monkeypatch):
             "hnsw_index_name": "my_hnsw_index",
             "hnsw_ef_search": 50,
             "keyword_index_name": "my_keyword_index",
+            "vector_type": "vector"
         },
     }
 
