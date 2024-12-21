@@ -809,21 +809,25 @@ class PgvectorDocumentStore:
         # https://github.com/pgvector/pgvector?tab=readme-ov-file#distances
         # cosine_similarity and inner_product are modified from the result of the operator
         if vector_function == "cosine_similarity":
-            score_definition = f"1 - (embedding <=> {query_embedding_for_postgres})"
+            score_definition = f"1 - (embedding <=> {query_embedding_for_postgres}::{self.vector_type}({self.embedding_dimension}))"
         elif vector_function == "inner_product":
-            score_definition = f"(embedding <#> {query_embedding_for_postgres}) * -1"
+            score_definition = f"(embedding <#> {query_embedding_for_postgres}::{self.vector_type}({self.embedding_dimension})) * -1"
         elif vector_function == "l2_distance":
-            score_definition = f"embedding <-> {query_embedding_for_postgres}"
+            score_definition = f"embedding <-> {query_embedding_for_postgres}::{self.vector_type}({self.embedding_dimension})"
 
         if weight_field:
             score_definition = f"{score_definition} * COALESCE((meta->>{weight_field})::float8, {default_weight})"
 
         score_definition = f"({score_definition}) AS score"
 
-        sql_select = SQL("SELECT *, {score} FROM {schema_name}.{table_name}").format(
+        # Add index hint based on search strategy
+        index_hint = f"/*+ NO_INDEX({self.table_name} {self.hnsw_index_name}) */" if self.search_strategy == "exact_nearest_neighbor" else ""
+
+        sql_select = SQL("SELECT {index_hint} *, {score} FROM {schema_name}.{table_name}").format(
             schema_name=Identifier(self.schema_name),
             table_name=Identifier(self.table_name),
             score=SQL(score_definition),
+            index_hint=SQL(index_hint),
         )
 
         sql_where_clause = SQL("")
@@ -841,6 +845,7 @@ class PgvectorDocumentStore:
         )
 
         sql_query = sql_select + sql_where_clause + sql_sort
+        print(sql_query)
 
         result = self._execute_sql(
             sql_query,
