@@ -845,7 +845,6 @@ class PgvectorDocumentStore:
         )
 
         sql_query = sql_select + sql_where_clause + sql_sort
-        print(sql_query)
 
         result = self._execute_sql(
             sql_query,
