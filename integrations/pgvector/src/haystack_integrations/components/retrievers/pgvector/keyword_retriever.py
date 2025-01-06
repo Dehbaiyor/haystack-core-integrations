@@ -113,6 +113,8 @@ class PgvectorKeywordRetriever:
         query: str,
         filters: Optional[Dict[str, Any]] = None,
         top_k: Optional[int] = None,
+        weight_field: Optional[str] = None,
+        default_weight: Optional[float] = None,
     ):
         """
         Retrieve documents from the `PgvectorDocumentStore`, based on keywords.
@@ -122,6 +124,8 @@ class PgvectorKeywordRetriever:
                         the `filter_policy` chosen at retriever initialization. See init method docstring for more
                         details.
         :param top_k: Maximum number of Documents to return.
+        :param weight_field: Field in the `Document`'s metadata to use for weighting the documents.
+        :param default_weight: Default weight to use if the `weight_field` is not present in the `Document`'s metadata.
 
         :returns: A dictionary with the following keys:
             - `documents`: List of `Document`s that match the query.
@@ -134,5 +138,7 @@ class PgvectorKeywordRetriever:
             query=query,
             filters=filters,
             top_k=top_k,
+            weight_field=weight_field,
+            default_weight=default_weight,
         )
         return {"documents": docs}

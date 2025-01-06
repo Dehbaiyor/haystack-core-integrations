@@ -715,7 +715,7 @@ class PgvectorDocumentStore:
         # Build the score definition based on whether weight_field is specified
         score_definition = "ts_rank_cd({table_name}.content_fts, query.q)"
         if weight_field:
-            score_definition += f" * COALESCE((meta->>{weight_field})::float8, {default_weight})"
+            score_definition += f" * COALESCE((meta->>'{weight_field}')::float8, {default_weight})"
         
         KEYWORD_QUERY = f"""
             WITH query AS (
@@ -816,7 +816,7 @@ class PgvectorDocumentStore:
             score_definition = f"embedding <-> {query_embedding_for_postgres}::{self.vector_type}({self.embedding_dimension})"
 
         if weight_field:
-            score_definition = f"{score_definition} * COALESCE((meta->>{weight_field})::float8, {default_weight})"
+            score_definition = f"{score_definition} * COALESCE((meta->>'{weight_field}')::float8, {default_weight})"
 
         score_definition = f"({score_definition}) AS score"
 
