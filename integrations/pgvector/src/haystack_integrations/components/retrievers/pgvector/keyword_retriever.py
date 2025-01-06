@@ -114,7 +114,7 @@ class PgvectorKeywordRetriever:
         filters: Optional[Dict[str, Any]] = None,
         top_k: Optional[int] = None,
         weight_field: Optional[str] = None,
-        default_weight: Optional[float] = None,
+        default_weight: float = 1.0,
     ):
         """
         Retrieve documents from the `PgvectorDocumentStore`, based on keywords.
