@@ -82,7 +82,7 @@ class PgvectorDocumentStore:
         self,
         *,
         connection_string: Secret = Secret.from_env_var("PG_CONN_STR"),
-        create_extension: bool = True,
+        create_extension: bool = False,
         schema_name: str = "public",
         table_name: str = "haystack_documents",
         language: str = "english",
@@ -169,7 +169,6 @@ class PgvectorDocumentStore:
         self._connection = None
         self._cursor = None
         self._dict_cursor = None
-        self._table_initialized = False
 
     @property
     def cursor(self):
@@ -215,7 +214,16 @@ class PgvectorDocumentStore:
         self._cursor = self._connection.cursor()
         self._dict_cursor = self._connection.cursor(row_factory=dict_row)
 
-        if not self._table_initialized:
+        # Check if table exists directly in PostgreSQL's system catalogs
+        table_exists = bool(
+            self._execute_sql(
+                "SELECT 1 FROM information_schema.tables WHERE table_schema = %s AND table_name = %s",
+                (self.schema_name, self.table_name),
+                "Could not check if table exists",
+            ).fetchone()
+        )
+
+        if not table_exists or self.recreate_table:
             self._initialize_table()
 
         return self._connection
@@ -232,8 +240,6 @@ class PgvectorDocumentStore:
 
         if self.search_strategy == "hnsw":
             self._handle_hnsw()
-
-        self._table_initialized = True
 
     @staticmethod
     def _connection_is_valid(connection):
