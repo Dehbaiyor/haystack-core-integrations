@@ -366,6 +366,7 @@ class PgvectorDocumentStore:
         """
         Internal method to create the keyword index if not exists.
         """
+        # First check if index exists
         index_exists = bool(
             self._execute_sql(
                 "SELECT 1 FROM pg_indexes WHERE schemaname = %s AND tablename = %s AND indexname = %s",
@@ -374,16 +375,17 @@ class PgvectorDocumentStore:
             ).fetchone()
         )
 
-        sql_create_index = SQL(
-            "CREATE INDEX {index_name} ON {schema_name}.{table_name} USING GIN (content_fts)"
-        ).format(
-            schema_name=Identifier(self.schema_name),
-            index_name=Identifier(self.keyword_index_name),
-            table_name=Identifier(self.table_name),
-            language=SQLLiteral(self.language),
-        )
-
+        # Only create index if it doesn't exist
         if not index_exists:
+            sql_create_index = SQL(
+                "CREATE INDEX {index_name} ON {schema_name}.{table_name} USING GIN (content_fts)"
+            ).format(
+                schema_name=Identifier(self.schema_name),
+                index_name=Identifier(self.keyword_index_name),
+                table_name=Identifier(self.table_name),
+                language=SQLLiteral(self.language),
+            )
+
             self._execute_sql(sql_create_index, error_msg="Could not create keyword index on table")
 
     def _handle_hnsw(self):
