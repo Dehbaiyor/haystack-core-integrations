@@ -25,37 +25,6 @@ from tqdm.auto import tqdm
 
 logger = logging.getLogger(__name__)
 
-CREATE_TABLE_STATEMENT = """
-CREATE TABLE IF NOT EXISTS {schema_name}.{table_name} (
-id VARCHAR(128) PRIMARY KEY,
-embedding {vector_type}({embedding_dimension}),
-created_at TIMESTAMPTZ DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC'),
-content TEXT,
-content_fts TSVECTOR generated always as (to_tsvector({language}, content)) stored,
-dataframe JSONB,
-blob_data BYTEA,
-blob_meta JSONB,
-blob_mime_type VARCHAR(255),
-meta JSONB)
-"""
-
-INSERT_STATEMENT = """
-INSERT INTO {schema_name}.{table_name}
-(id, embedding, content, dataframe, blob_data, blob_meta, blob_mime_type, meta)
-VALUES (%(id)s, %(embedding)s, %(content)s, %(dataframe)s, %(blob_data)s, %(blob_meta)s, %(blob_mime_type)s, %(meta)s)
-"""
-
-UPDATE_STATEMENT = """
-ON CONFLICT (id) DO UPDATE SET
-embedding = EXCLUDED.embedding,
-content = EXCLUDED.content,
-dataframe = EXCLUDED.dataframe,
-blob_data = EXCLUDED.blob_data,
-blob_meta = EXCLUDED.blob_meta,
-blob_mime_type = EXCLUDED.blob_mime_type,
-meta = EXCLUDED.meta
-"""
-
 VALID_VECTOR_FUNCTIONS = ["cosine_similarity", "inner_product", "l2_distance"]
 
 VECTOR_FUNCTION_TO_POSTGRESQL_OPS = {
@@ -96,6 +65,7 @@ class PgvectorDocumentStore:
         hnsw_index_name: str = "haystack_hnsw_index",
         hnsw_ef_search: Optional[int] = None,
         keyword_index_name: str = "haystack_keyword_index",
+        metadata_columns_to_index: List[str] = None,
     ):
         """
         Creates a new PgvectorDocumentStore instance.
@@ -169,6 +139,7 @@ class PgvectorDocumentStore:
         self._connection = None
         self._cursor = None
         self._dict_cursor = None
+        self.metadata_columns_to_index = metadata_columns_to_index or []
 
     @property
     def cursor(self):
@@ -331,12 +302,42 @@ class PgvectorDocumentStore:
         Creates the table to store Haystack documents if it doesn't exist yet.
         """
 
+        # Define base columns for the table
+        base_columns = [
+            "id VARCHAR(128) PRIMARY KEY",
+            "embedding {vector_type}({embedding_dimension})",
+            "created_at TIMESTAMPTZ DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')",
+            "content TEXT",
+            "content_fts TSVECTOR generated always as (to_tsvector({language}, content)) stored",
+            "dataframe JSONB",
+            "blob_data BYTEA",
+            "blob_meta JSONB",
+            "blob_mime_type VARCHAR(255)",
+            "meta JSONB"
+        ]
+        
+        # Add metadata columns to be indexed
+        metadata_columns = []
+        for column in self.metadata_columns_to_index:
+            # Default to TEXT type for metadata columns
+            metadata_columns.append(f"{column} TEXT")
+        
+        # Combine all columns
+        all_columns = base_columns + metadata_columns
+        columns_definition = ",\n".join(all_columns)
+        
+        CREATE_TABLE_STATEMENT = """
+CREATE TABLE IF NOT EXISTS {schema_name}.{table_name} (
+{columns_definition})
+"""
+
         create_sql = SQL(CREATE_TABLE_STATEMENT).format(
             schema_name=Identifier(self.schema_name),
             table_name=Identifier(self.table_name),
             vector_type=SQL(self.vector_type),
             embedding_dimension=SQLLiteral(self.embedding_dimension),
             language=SQLLiteral(self.language),
+            columns_definition=SQL(columns_definition)
         )
 
         self._execute_sql(create_sql, error_msg="Could not create table in PgvectorDocumentStore")
@@ -551,10 +552,42 @@ class PgvectorDocumentStore:
         if policy == DuplicatePolicy.NONE:
             policy = DuplicatePolicy.FAIL
 
-        db_documents = self._from_haystack_to_pg_documents(documents)
+        db_documents = self._from_haystack_to_pg_documents(documents, self.metadata_columns_to_index)
 
+        columns = ["id", "embedding", "content", "dataframe", "blob_data", "blob_meta", "blob_mime_type", "meta"]
+        expanded_columns = columns + self.metadata_columns_to_index
+
+        # Create dynamic UPDATE statement for conflict resolution
+        update_parts = []
+        for col in columns[1:]:  # Skip 'id' which is the primary key
+            update_parts.append(f"{col} = EXCLUDED.{col}")
+        
+        # Add metadata columns to update statement
+        for col in self.metadata_columns_to_index:
+            update_parts.append(f"{col} = EXCLUDED.{col}")
+            
+        update_clause = ",\n".join(update_parts)
+        
+        UPDATE_STATEMENT = f"""
+ON CONFLICT (id) DO UPDATE SET
+{update_clause}
+"""
+
+        INSERT_STATEMENT = """
+INSERT INTO {schema_name}.{table_name}
+({columns})
+VALUES ({placeholders})
+"""
+
+        # Create the columns string and placeholders for the SQL statement
+        columns_str = ", ".join(expanded_columns)
+        placeholders = ", ".join([f"%({col})s" for col in expanded_columns])
+        
         sql_insert = SQL(INSERT_STATEMENT).format(
-            schema_name=Identifier(self.schema_name), table_name=Identifier(self.table_name)
+            schema_name=Identifier(self.schema_name), 
+            table_name=Identifier(self.table_name),
+            columns=SQL(columns_str),
+            placeholders=SQL(placeholders)
         )
 
         if policy == DuplicatePolicy.OVERWRITE:
@@ -593,7 +626,7 @@ class PgvectorDocumentStore:
         return written_docs
 
     @staticmethod
-    def _from_haystack_to_pg_documents(documents: List[Document]) -> List[Dict[str, Any]]:
+    def _from_haystack_to_pg_documents(documents: List[Document], metadata_columns_to_index: List[str]) -> List[Dict[str, Any]]:
         """
         Internal method to convert a list of Haystack Documents to a list of dictionaries that can be used to insert
         documents into the PgvectorDocumentStore.
@@ -611,6 +644,9 @@ class PgvectorDocumentStore:
             db_document["dataframe"] = Jsonb(db_document["dataframe"]) if db_document["dataframe"] else None
             db_document["meta"] = Jsonb(db_document["meta"])
 
+            for column in metadata_columns_to_index:
+                db_document[column] = db_document["meta"][column]
+
             if "sparse_embedding" in db_document:
                 sparse_embedding = db_document.pop("sparse_embedding", None)
                 if sparse_embedding:
@@ -626,7 +662,7 @@ class PgvectorDocumentStore:
         return db_documents
 
     @staticmethod
-    def _from_pg_to_haystack_documents(documents: List[Dict[str, Any]]) -> List[Document]:
+    def _from_pg_to_haystack_documents(documents: List[Dict[str, Any]], metadata_columns_to_index: List[str]) -> List[Document]:
         """
         Internal method to convert a list of dictionaries from pgvector to a list of Haystack Documents.
         """
@@ -643,6 +679,8 @@ class PgvectorDocumentStore:
             haystack_dict.pop("created_at", None)
             haystack_dict.pop("updated_at", None)
             haystack_dict.pop("q", None)  # Remove the query field from CTE in hybrid retrieval
+            for column in metadata_columns_to_index:
+                haystack_dict.pop(column, None)
 
             embedding_score = haystack_dict.pop("embedding_rank", None)
             if embedding_score is not None:
@@ -769,7 +807,7 @@ class PgvectorDocumentStore:
                 logger.debug(f"No matching documents found for the keyword query - {sql_query}")
                 return []
             
-            docs = self._from_pg_to_haystack_documents(records)
+            docs = self._from_pg_to_haystack_documents(records, self.metadata_columns_to_index)
             return docs
         except Exception as e:
             logger.error(f"Error fetching results from keyword query ({sql_query}): {str(e)}")
@@ -862,7 +900,7 @@ class PgvectorDocumentStore:
         )
 
         records = result.fetchall()
-        docs = self._from_pg_to_haystack_documents(records)
+        docs = self._from_pg_to_haystack_documents(records, self.metadata_columns_to_index)
         return docs
 
     def _hybrid_retrieval(
@@ -1031,7 +1069,7 @@ class PgvectorDocumentStore:
 
         # Convert results to documents
         records = result.fetchall()
-        docs = self._from_pg_to_haystack_documents(records)
+        docs = self._from_pg_to_haystack_documents(records, self.metadata_columns_to_index)
         return docs
 
     def create_index_on_meta_field(self, field: str):
