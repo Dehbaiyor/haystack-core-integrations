@@ -215,16 +215,16 @@ class PgvectorDocumentStore:
         self._dict_cursor = self._connection.cursor(row_factory=dict_row)
 
         # Check if table exists directly in PostgreSQL's system catalogs
-        table_exists = bool(
-            self._execute_sql(
-                "SELECT 1 FROM information_schema.tables WHERE table_schema = %s AND table_name = %s",
-                (self.schema_name, self.table_name),
-                "Could not check if table exists",
-            ).fetchone()
-        )
+        # table_exists = bool(
+        #     self._execute_sql(
+        #         "SELECT 1 FROM information_schema.tables WHERE table_schema = %s AND table_name = %s",
+        #         (self.schema_name, self.table_name),
+        #         "Could not check if table exists",
+        #     ).fetchone()
+        # )
 
-        if not table_exists or self.recreate_table:
-            self._initialize_table()
+        # if not table_exists or self.recreate_table:
+        self._initialize_table()
 
         return self._connection
 
