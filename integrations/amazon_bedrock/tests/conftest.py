@@ -19,9 +19,8 @@ def mock_boto3_session():
         yield mock_client
 
 
+# create a fixture with mocked aioboto3 client and session
 @pytest.fixture
-def mock_prompt_handler():
-    with patch(
-        "haystack_integrations.components.generators.amazon_bedrock.handlers.DefaultPromptHandler"
-    ) as mock_prompt_handler:
-        yield mock_prompt_handler
+def mock_aioboto3_session():
+    with patch("aioboto3.Session") as mock_client:
+        yield mock_client

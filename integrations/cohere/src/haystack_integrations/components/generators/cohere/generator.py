@@ -1,10 +1,9 @@
 # SPDX-FileCopyrightText: 2023-present deepset GmbH <info@deepset.ai>
 #
 # SPDX-License-Identifier: Apache-2.0
-import logging
 from typing import Any, Callable, Dict, List, Optional
 
-from haystack import component
+from haystack import component, logging
 from haystack.dataclasses import ChatMessage
 from haystack.utils import Secret
 
@@ -67,4 +66,4 @@ class CohereGenerator(CohereChatGenerator):
         chat_message = ChatMessage.from_user(prompt)
         # Note we have to call super() like this because of the way components are dynamically built with the decorator
         results = super(CohereGenerator, self).run([chat_message])  # noqa
-        return {"replies": [results["replies"][0].content], "meta": [results["replies"][0].meta]}
+        return {"replies": [results["replies"][0].text], "meta": [results["replies"][0].meta]}

@@ -218,10 +218,6 @@ class TestDocumentStore(DocumentStoreBaseTests):
     def test_comparison_not_equal(self, document_store, filterable_docs):
         pass
 
-    @pytest.mark.skip(reason="Unsupported filter operator $neq.")
-    def test_comparison_not_equal_with_dataframe(self, document_store, filterable_docs):
-        pass
-
     @pytest.mark.skip(reason="Unsupported filter operator $nin.")
     def test_comparison_not_in(self, document_store, filterable_docs):
         pass
@@ -240,10 +236,6 @@ class TestDocumentStore(DocumentStoreBaseTests):
 
     @pytest.mark.skip(reason="Unsupported filter operator $gt.")
     def test_comparison_greater_than_with_string(self, document_store, filterable_docs):
-        pass
-
-    @pytest.mark.skip(reason="Unsupported filter operator $gt.")
-    def test_comparison_greater_than_with_dataframe(self, document_store, filterable_docs):
         pass
 
     @pytest.mark.skip(reason="Unsupported filter operator $gt.")
@@ -271,10 +263,6 @@ class TestDocumentStore(DocumentStoreBaseTests):
         pass
 
     @pytest.mark.skip(reason="Unsupported filter operator $gte.")
-    def test_comparison_greater_than_equal_with_dataframe(self, document_store, filterable_docs):
-        pass
-
-    @pytest.mark.skip(reason="Unsupported filter operator $gte.")
     def test_comparison_greater_than_equal_with_string(self, document_store, filterable_docs):
         pass
 
@@ -288,10 +276,6 @@ class TestDocumentStore(DocumentStoreBaseTests):
 
     @pytest.mark.skip(reason="Unsupported filter operator $lte.")
     def test_comparison_less_than_equal_with_string(self, document_store, filterable_docs):
-        pass
-
-    @pytest.mark.skip(reason="Unsupported filter operator $lte.")
-    def test_comparison_less_than_equal_with_dataframe(self, document_store, filterable_docs):
         pass
 
     @pytest.mark.skip(reason="Unsupported filter operator $lte.")
@@ -312,10 +296,6 @@ class TestDocumentStore(DocumentStoreBaseTests):
 
     @pytest.mark.skip(reason="Unsupported filter operator $lt.")
     def test_comparison_less_than_with_list(self, document_store, filterable_docs):
-        pass
-
-    @pytest.mark.skip(reason="Unsupported filter operator $lt.")
-    def test_comparison_less_than_with_dataframe(self, document_store, filterable_docs):
         pass
 
     @pytest.mark.skip(reason="Unsupported filter operator $lt.")

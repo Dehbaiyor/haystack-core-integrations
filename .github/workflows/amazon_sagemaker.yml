@@ -8,6 +8,7 @@ on:
   pull_request:
     paths:
       - "integrations/amazon_sagemaker/**"
+      - "!integrations/amazon_sagemaker/*.md"
       - ".github/workflows/amazon_sagemaker.yml"
 
 defaults:
@@ -30,7 +31,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        python-version: ["3.9", "3.10"]
+        python-version: ["3.9", "3.13"]
 
     steps:
       - name: Support longpaths
@@ -62,7 +63,7 @@ jobs:
       - name: Nightly - run unit tests with Haystack main branch
         if: github.event_name == 'schedule'
         run: |
-          hatch run pip install git+https://github.com/deepset-ai/haystack.git
+          hatch run uv pip install git+https://github.com/deepset-ai/haystack.git@main
           hatch run cov-retry -m "not integration"
 
       - name: Send event to Datadog for nightly failures

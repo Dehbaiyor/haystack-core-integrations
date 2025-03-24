@@ -43,7 +43,6 @@ class TestAmazonBedrockTextEmbedder:
             )
 
     def test_to_dict(self, mock_boto3_session):
-
         embedder = AmazonBedrockTextEmbedder(
             model="cohere.embed-english-v3",
             input_type="search_query",
@@ -59,13 +58,13 @@ class TestAmazonBedrockTextEmbedder:
                 "aws_profile_name": {"type": "env_var", "env_vars": ["AWS_PROFILE"], "strict": False},
                 "model": "cohere.embed-english-v3",
                 "input_type": "search_query",
+                "boto3_config": None,
             },
         }
 
         assert embedder.to_dict() == expected_dict
 
     def test_from_dict(self, mock_boto3_session):
-
         data = {
             "type": "haystack_integrations.components.embedders.amazon_bedrock.text_embedder.AmazonBedrockTextEmbedder",
             "init_parameters": {
@@ -76,6 +75,9 @@ class TestAmazonBedrockTextEmbedder:
                 "aws_profile_name": {"type": "env_var", "env_vars": ["AWS_PROFILE"], "strict": False},
                 "model": "cohere.embed-english-v3",
                 "input_type": "search_query",
+                "boto3_config": {
+                    "read_timeout": 1000,
+                },
             },
         }
 
@@ -83,6 +85,7 @@ class TestAmazonBedrockTextEmbedder:
 
         assert embedder.model == "cohere.embed-english-v3"
         assert embedder.kwargs == {"input_type": "search_query"}
+        assert embedder.boto3_config == {"read_timeout": 1000}
 
     def test_init_invalid_model(self):
         with pytest.raises(ValueError):

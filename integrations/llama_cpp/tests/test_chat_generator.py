@@ -2,14 +2,16 @@ import json
 import os
 import urllib.request
 from pathlib import Path
+from typing import Annotated
 from unittest.mock import MagicMock
 
 import pytest
 from haystack import Document, Pipeline
 from haystack.components.builders import ChatPromptBuilder
 from haystack.components.retrievers.in_memory import InMemoryBM25Retriever
-from haystack.dataclasses import ChatMessage, ChatRole
+from haystack.dataclasses import ChatMessage, ChatRole, TextContent, ToolCall
 from haystack.document_stores.in_memory import InMemoryDocumentStore
+from haystack.tools import create_tool_from_function
 
 from haystack_integrations.components.generators.llama_cpp.chat.chat_generator import (
     LlamaCppChatGenerator,
@@ -35,17 +37,72 @@ def download_file(file_link, filename, capsys):
 
 def test_convert_message_to_llamacpp_format():
     message = ChatMessage.from_system("You are good assistant")
-    assert _convert_message_to_llamacpp_format(message) == {"role": "system", "content": "You are good assistant"}
+    assert _convert_message_to_llamacpp_format(message) == {
+        "role": "system",
+        "content": "You are good assistant",
+    }
 
     message = ChatMessage.from_user("I have a question")
-    assert _convert_message_to_llamacpp_format(message) == {"role": "user", "content": "I have a question"}
+    assert _convert_message_to_llamacpp_format(message) == {
+        "role": "user",
+        "content": "I have a question",
+    }
 
-    message = ChatMessage.from_function("Function call", "function_name")
+    message = ChatMessage.from_assistant(text="I have an answer", meta={"finish_reason": "stop"})
+    assert _convert_message_to_llamacpp_format(message) == {
+        "role": "assistant",
+        "content": "I have an answer",
+    }
+
+    message = ChatMessage.from_assistant(
+        tool_calls=[ToolCall(id="123", tool_name="weather", arguments={"city": "Paris"})]
+    )
+    assert _convert_message_to_llamacpp_format(message) == {
+        "role": "assistant",
+        "tool_calls": [
+            {
+                "type": "function",
+                "function": {"name": "weather", "arguments": '{"city": "Paris"}'},
+                "id": "123",
+            }
+        ],
+    }
+
+    tool_result = json.dumps({"weather": "sunny", "temperature": "25"})
+    message = ChatMessage.from_tool(
+        tool_result=tool_result,
+        origin=ToolCall(id="123", tool_name="weather", arguments={"city": "Paris"}),
+    )
     assert _convert_message_to_llamacpp_format(message) == {
         "role": "function",
-        "content": "Function call",
-        "name": "function_name",
+        "content": tool_result,
+        "tool_call_id": "123",
     }
+
+
+def test_convert_message_to_llamacpp_invalid():
+    message = ChatMessage(_role=ChatRole.ASSISTANT, _content=[])
+    with pytest.raises(ValueError):
+        _convert_message_to_llamacpp_format(message)
+
+    message = ChatMessage(
+        _role=ChatRole.ASSISTANT,
+        _content=[
+            TextContent(text="I have an answer"),
+            TextContent(text="I have another answer"),
+        ],
+    )
+    with pytest.raises(ValueError):
+        _convert_message_to_llamacpp_format(message)
+
+    tool_call_null_id = ToolCall(id=None, tool_name="weather", arguments={"city": "Paris"})
+    message = ChatMessage.from_assistant(tool_calls=[tool_call_null_id])
+    with pytest.raises(ValueError):
+        _convert_message_to_llamacpp_format(message)
+
+    message = ChatMessage.from_tool(tool_result="result", origin=tool_call_null_id)
+    with pytest.raises(ValueError):
+        _convert_message_to_llamacpp_format(message)
 
 
 class TestLlamaCppChatGenerator:
@@ -68,7 +125,7 @@ class TestLlamaCppChatGenerator:
     def generator_mock(self):
         mock_model = MagicMock()
         generator = LlamaCppChatGenerator(model="test_model.gguf", n_ctx=2048, n_batch=512)
-        generator.model = mock_model
+        generator._model = mock_model
         return generator, mock_model
 
     def test_default_init(self):
@@ -98,6 +155,39 @@ class TestLlamaCppChatGenerator:
         assert generator.n_batch == 512
         assert generator.model_kwargs == {"model_path": "test_model.gguf", "n_ctx": 8192, "n_batch": 512}
         assert generator.generation_kwargs == {}
+
+    def test_to_dict(self):
+        generator = LlamaCppChatGenerator(model="test_model.gguf", n_ctx=8192, n_batch=512)
+        assert generator.to_dict() == {
+            "type": "haystack_integrations.components.generators.llama_cpp.chat.chat_generator.LlamaCppChatGenerator",
+            "init_parameters": {
+                "model": "test_model.gguf",
+                "n_ctx": 8192,
+                "n_batch": 512,
+                "model_kwargs": {"model_path": "test_model.gguf", "n_ctx": 8192, "n_batch": 512},
+                "generation_kwargs": {},
+                "tools": None,
+            },
+        }
+
+    def test_from_dict(self):
+        serialized = {
+            "type": "haystack_integrations.components.generators.llama_cpp.chat.chat_generator.LlamaCppChatGenerator",
+            "init_parameters": {
+                "model": "test_model.gguf",
+                "n_ctx": 8192,
+                "n_batch": 512,
+                "model_kwargs": {"model_path": "test_model.gguf", "n_ctx": 8192, "n_batch": 512},
+                "generation_kwargs": {},
+                "tools": None,
+            },
+        }
+        deserialized = LlamaCppChatGenerator.from_dict(serialized)
+        assert deserialized.model_path == "test_model.gguf"
+        assert deserialized.n_ctx == 8192
+        assert deserialized.n_batch == 512
+        assert deserialized.model_kwargs == {"model_path": "test_model.gguf", "n_ctx": 8192, "n_batch": 512}
+        assert deserialized.generation_kwargs == {}
 
     def test_ignores_model_path_if_specified_in_model_kwargs(self):
         """
@@ -163,7 +253,7 @@ class TestLlamaCppChatGenerator:
         assert isinstance(result["replies"], list)
         assert len(result["replies"]) == 1
         assert isinstance(result["replies"][0], ChatMessage)
-        assert result["replies"][0].content == "Generated text"
+        assert result["replies"][0].text == "Generated text"
         assert result["replies"][0].role == ChatRole.ASSISTANT
 
     def test_run_with_generation_kwargs(self, generator_mock):
@@ -183,7 +273,7 @@ class TestLlamaCppChatGenerator:
         mock_model.create_chat_completion.return_value = mock_output
         generation_kwargs = {"max_tokens": 128}
         result = generator.run([ChatMessage.from_system("Write a 200 word paragraph.")], generation_kwargs)
-        assert result["replies"][0].content == "Generated text"
+        assert result["replies"][0].text == "Generated text"
         assert result["replies"][0].meta["finish_reason"] == "length"
 
     @pytest.mark.integration
@@ -206,7 +296,7 @@ class TestLlamaCppChatGenerator:
             assert "replies" in result
             assert isinstance(result["replies"], list)
             assert len(result["replies"]) > 0
-            assert any(answer.lower() in reply.content.lower() for reply in result["replies"])
+            assert any(answer.lower() in reply.text.lower() for reply in result["replies"])
 
     @pytest.mark.integration
     def test_run_rag_pipeline(self, generator):
@@ -270,7 +360,7 @@ class TestLlamaCppChatGenerator:
 
         replies = result["llm"]["replies"]
         assert len(replies) > 0
-        assert any("bioluminescent waves" in reply.content for reply in replies)
+        assert any("bioluminescent waves" in reply.text.lower() for reply in replies)
         assert all(reply.role == ChatRole.ASSISTANT for reply in replies)
 
     @pytest.mark.integration
@@ -308,28 +398,29 @@ class TestLlamaCppChatGenerator:
         assert len(result["replies"]) > 0
         assert all(reply.role == ChatRole.ASSISTANT for reply in result["replies"])
         for reply in result["replies"]:
-            assert json.loads(reply.content)
-            assert isinstance(json.loads(reply.content), dict)
-            assert "people" in json.loads(reply.content)
-            assert isinstance(json.loads(reply.content)["people"], list)
-            assert all(isinstance(person, dict) for person in json.loads(reply.content)["people"])
-            assert all("name" in person for person in json.loads(reply.content)["people"])
-            assert all("age" in person for person in json.loads(reply.content)["people"])
-            assert all(isinstance(person["name"], str) for person in json.loads(reply.content)["people"])
-            assert all(isinstance(person["age"], int) for person in json.loads(reply.content)["people"])
+            assert json.loads(reply.text)
+            assert isinstance(json.loads(reply.text), dict)
+            assert "people" in json.loads(reply.text)
+            assert isinstance(json.loads(reply.text)["people"], list)
+            assert all(isinstance(person, dict) for person in json.loads(reply.text)["people"])
+            assert all("name" in person for person in json.loads(reply.text)["people"])
+            assert all("age" in person for person in json.loads(reply.text)["people"])
+            assert all(isinstance(person["name"], str) for person in json.loads(reply.text)["people"])
+            assert all(isinstance(person["age"], int) for person in json.loads(reply.text)["people"])
 
 
 class TestLlamaCppChatGeneratorFunctionary:
-    def get_current_temperature(self, location):
+    def get_current_temperature(self, location: Annotated[str, "The city and state, e.g. San Francisco, CA"]):
         """Get the current temperature in a given location"""
+
         if "tokyo" in location.lower():
-            return json.dumps({"location": "Tokyo", "temperature": "10", "unit": "celsius"})
-        elif "san francisco" in location.lower():
-            return json.dumps({"location": "San Francisco", "temperature": "72", "unit": "fahrenheit"})
-        elif "paris" in location.lower():
-            return json.dumps({"location": "Paris", "temperature": "22", "unit": "celsius"})
-        else:
-            return json.dumps({"location": location, "temperature": "unknown"})
+            return {"location": "Tokyo", "temperature": "10", "unit": "celsius"}
+        if "san francisco" in location.lower():
+            return {"location": "San Francisco", "temperature": "72", "unit": "fahrenheit"}
+        if "paris" in location.lower():
+            return {"location": "Paris", "temperature": "22", "unit": "celsius"}
+
+        return {"location": location, "temperature": "unknown"}
 
     @pytest.fixture
     def generator(self, model_path, capsys):
@@ -354,85 +445,60 @@ class TestLlamaCppChatGeneratorFunctionary:
 
     @pytest.mark.integration
     def test_function_call(self, generator):
-        tools = [
-            {
-                "type": "function",
-                "function": {
-                    "name": "get_user_info",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "username": {"type": "string", "description": "The username to retrieve information for."}
-                        },
-                        "required": ["username"],
-                    },
-                    "description": "Retrieves detailed information about a user.",
-                },
-            }
-        ]
+
+        def get_user_info(username: Annotated[str, "The username to retrieve information for."]):
+            """Retrieves detailed information about a user."""
+            return {"username": username, "age": 25, "location": "San Francisco"}
+
+        tool = create_tool_from_function(get_user_info)
+
         tool_choice = {"type": "function", "function": {"name": "get_user_info"}}
 
         messages = [
             ChatMessage.from_user("Get information for user john_doe"),
         ]
-        response = generator.run(messages=messages, generation_kwargs={"tools": tools, "tool_choice": tool_choice})
+        response = generator.run(messages=messages, tools=[tool], generation_kwargs={"tool_choice": tool_choice})
 
-        assert "tool_calls" in response["replies"][0].meta
-        tool_calls = response["replies"][0].meta["tool_calls"]
+        reply = response["replies"][0]
+
+        assert reply.role == ChatRole.ASSISTANT
+        assert reply.tool_calls
+        tool_calls = reply.tool_calls
         assert len(tool_calls) > 0
-        assert tool_calls[0]["function"]["name"] == "get_user_info"
-        assert "username" in json.loads(tool_calls[0]["function"]["arguments"])
-        assert response["replies"][0].role == ChatRole.ASSISTANT
+        assert tool_calls[0].tool_name == "get_user_info"
+        assert tool_calls[0].arguments == {"username": "john_doe"}
 
     def test_function_call_and_execute(self, generator):
-        messages = [ChatMessage.from_user("What's the weather like in San Francisco?")]
-        tools = [
-            {
-                "type": "function",
-                "function": {
-                    "name": "get_current_temperature",
-                    "description": "Get the current temperature in a given location",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "location": {
-                                "type": "string",
-                                "description": "The city and state, e.g. San Francisco, CA",
-                            },
-                        },
-                        "required": ["location"],
-                    },
-                },
-            }
-        ]
+        temperature_tool = create_tool_from_function(self.get_current_temperature)
+
+        user_message = ChatMessage.from_user("What's the weather like in San Francisco?")
 
         tool_choice = {"type": "function", "function": {"name": "get_current_temperature"}}
-        response = generator.run(messages=messages, generation_kwargs={"tools": tools, "tool_choice": tool_choice})
-
-        available_functions = {
-            "get_current_temperature": self.get_current_temperature,
-        }
+        response = generator.run(
+            messages=[user_message], tools=[temperature_tool], generation_kwargs={"tool_choice": tool_choice}
+        )
 
         assert "replies" in response
         assert len(response["replies"]) > 0
-
         first_reply = response["replies"][0]
-        assert "tool_calls" in first_reply.meta
-        tool_calls = first_reply.meta["tool_calls"]
+        assert first_reply.tool_calls
+        tool_calls = first_reply.tool_calls
 
-        for tool_call in tool_calls:
-            function_name = tool_call["function"]["name"]
-            function_args = json.loads(tool_call["function"]["arguments"])
-            assert function_name in available_functions
-            function_response = available_functions[function_name](**function_args)
-            function_message = ChatMessage.from_function(function_response, function_name)
-            messages.append(function_message)
+        # tool invocation
+        tool_call = tool_calls[0]
+        function_args = tool_call.arguments
+        tool_response = str(temperature_tool.invoke(**function_args))
 
-        second_response = generator.run(messages=messages)
+        tool_message = ChatMessage.from_tool(tool_result=tool_response, origin=tool_call)
+
+        all_messages = [user_message, first_reply, tool_message]
+        print(all_messages)
+
+        second_response = generator.run(messages=all_messages)
         assert "replies" in second_response
         assert len(second_response["replies"]) > 0
-        assert any("San Francisco" in reply.content for reply in second_response["replies"])
-        assert any("72" in reply.content for reply in second_response["replies"])
+        assert any("San Francisco" in reply.text for reply in second_response["replies"])
+        assert any("72" in reply.text for reply in second_response["replies"])
 
 
 class TestLlamaCppChatGeneratorChatML:
@@ -458,42 +524,33 @@ class TestLlamaCppChatGeneratorChatML:
 
     @pytest.mark.integration
     def test_function_call_chatml(self, generator):
+
+        def get_user_detail(name: Annotated[str, "The name of the user"], age: Annotated[int, "The age of the user"]):
+            """Retrieves detailed information about a user."""
+            pass
+
+        tool = create_tool_from_function(get_user_detail)
+
         messages = [
             ChatMessage.from_system(
                 """A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful,
                 detailed, and polite answers to the user's questions. The assistant calls functions with appropriate
                 input when necessary"""
             ),
-            ChatMessage.from_user("Extract Jason is 25 years old"),
+            ChatMessage.from_user("Get details for user: Jason who is 25 years old"),
         ]
 
-        tools = [
-            {
-                "type": "function",
-                "function": {
-                    "name": "UserDetail",
-                    "parameters": {
-                        "type": "object",
-                        "title": "UserDetail",
-                        "properties": {
-                            "name": {"title": "Name", "type": "string"},
-                            "age": {"title": "Age", "type": "integer"},
-                        },
-                        "required": ["name", "age"],
-                    },
-                },
-            }
-        ]
+        tool_choice = {"type": "function", "function": {"name": "get_user_detail"}}
 
-        tool_choice = {"type": "function", "function": {"name": "UserDetail"}}
+        response = generator.run(messages=messages, tools=[tool], generation_kwargs={"tool_choice": tool_choice})
 
-        response = generator.run(messages=messages, generation_kwargs={"tools": tools, "tool_choice": tool_choice})
-        for reply in response["replies"]:
-            assert "tool_calls" in reply.meta
-            tool_calls = reply.meta["tool_calls"]
-            assert len(tool_calls) > 0
-            assert tool_calls[0]["function"]["name"] == "UserDetail"
-            assert "name" in json.loads(tool_calls[0]["function"]["arguments"])
-            assert "age" in json.loads(tool_calls[0]["function"]["arguments"])
-            assert "Jason" in json.loads(tool_calls[0]["function"]["arguments"])["name"]
-            assert 25 == json.loads(tool_calls[0]["function"]["arguments"])["age"]
+        reply = response["replies"][0]
+        assert reply.tool_calls
+        tool_calls = reply.tool_calls
+        assert len(tool_calls) > 0
+        assert tool_calls[0].tool_name == "get_user_detail"
+        arguments = tool_calls[0].arguments
+        assert "name" in arguments
+        assert "age" in arguments
+        assert arguments["name"] == "Jason"
+        assert arguments["age"] == 25

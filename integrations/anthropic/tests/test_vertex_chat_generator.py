@@ -57,6 +57,7 @@ class TestAnthropicVertexChatGenerator:
                 "streaming_callback": None,
                 "generation_kwargs": {},
                 "ignore_tools_thinking_messages": True,
+                "tools": None,
             },
         }
 
@@ -80,30 +81,7 @@ class TestAnthropicVertexChatGenerator:
                 "streaming_callback": "haystack.components.generators.utils.print_streaming_chunk",
                 "generation_kwargs": {"max_tokens": 10, "some_test_param": "test-params"},
                 "ignore_tools_thinking_messages": True,
-            },
-        }
-
-    def test_to_dict_with_lambda_streaming_callback(self):
-        component = AnthropicVertexChatGenerator(
-            region="us-central1",
-            project_id="test-project-id",
-            model="claude-3-5-sonnet@20240620",
-            streaming_callback=lambda x: x,
-            generation_kwargs={"max_tokens": 10, "some_test_param": "test-params"},
-        )
-        data = component.to_dict()
-        assert data == {
-            "type": (
-                "haystack_integrations.components.generators."
-                "anthropic.chat.vertex_chat_generator.AnthropicVertexChatGenerator"
-            ),
-            "init_parameters": {
-                "region": "us-central1",
-                "project_id": "test-project-id",
-                "model": "claude-3-5-sonnet@20240620",
-                "streaming_callback": "tests.test_vertex_chat_generator.<lambda>",
-                "generation_kwargs": {"max_tokens": 10, "some_test_param": "test-params"},
-                "ignore_tools_thinking_messages": True,
+                "tools": None,
             },
         }
 
@@ -188,9 +166,9 @@ class TestAnthropicVertexChatGenerator:
 
         first_reply = replies[0]
         assert isinstance(first_reply, ChatMessage), "First reply is not a ChatMessage instance"
-        assert first_reply.content, "First reply has no content"
+        assert first_reply.text, "First reply has no text"
         assert ChatMessage.is_from(first_reply, ChatRole.ASSISTANT), "First reply is not from the assistant"
-        assert "paris" in first_reply.content.lower(), "First reply does not contain 'paris'"
+        assert "paris" in first_reply.text.lower(), "First reply does not contain 'paris'"
         assert first_reply.meta, "First reply has no metadata"
 
     # Anthropic messages API is similar for AnthropicVertex and Anthropic endpoint,

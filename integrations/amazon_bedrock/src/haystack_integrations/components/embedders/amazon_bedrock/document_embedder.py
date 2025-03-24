@@ -1,9 +1,9 @@
 import json
-import logging
 from typing import Any, Dict, List, Literal, Optional
 
+from botocore.config import Config
 from botocore.exceptions import ClientError
-from haystack import component, default_from_dict, default_to_dict
+from haystack import component, default_from_dict, default_to_dict, logging
 from haystack.dataclasses import Document
 from haystack.utils.auth import Secret, deserialize_secrets_inplace
 from tqdm import tqdm
@@ -73,6 +73,7 @@ class AmazonBedrockDocumentEmbedder:
         progress_bar: bool = True,
         meta_fields_to_embed: Optional[List[str]] = None,
         embedding_separator: str = "\n",
+        boto3_config: Optional[Dict[str, Any]] = None,
         **kwargs,
     ):
         """
@@ -98,6 +99,7 @@ class AmazonBedrockDocumentEmbedder:
             to keep the logs clean.
         :param meta_fields_to_embed: List of meta fields that should be embedded along with the Document text.
         :param embedding_separator: Separator used to concatenate the meta fields to the Document text.
+        :param boto3_config: The configuration for the boto3 client.
         :param kwargs: Additional parameters to pass for model inference. For example, `input_type` and `truncate` for
             Cohere models.
         :raises ValueError: If the model is not supported.
@@ -110,6 +112,19 @@ class AmazonBedrockDocumentEmbedder:
             )
             raise ValueError(msg)
 
+        self.model = model
+        self.aws_access_key_id = aws_access_key_id
+        self.aws_secret_access_key = aws_secret_access_key
+        self.aws_session_token = aws_session_token
+        self.aws_region_name = aws_region_name
+        self.aws_profile_name = aws_profile_name
+        self.batch_size = batch_size
+        self.progress_bar = progress_bar
+        self.meta_fields_to_embed = meta_fields_to_embed or []
+        self.embedding_separator = embedding_separator
+        self.boto3_config = boto3_config
+        self.kwargs = kwargs
+
         def resolve_secret(secret: Optional[Secret]) -> Optional[str]:
             return secret.resolve_value() if secret else None
 
@@ -121,25 +136,16 @@ class AmazonBedrockDocumentEmbedder:
                 aws_region_name=resolve_secret(aws_region_name),
                 aws_profile_name=resolve_secret(aws_profile_name),
             )
-            self._client = session.client("bedrock-runtime")
+            config: Optional[Config] = None
+            if self.boto3_config:
+                config = Config(**self.boto3_config)
+            self._client = session.client("bedrock-runtime", config=config)
         except Exception as exception:
             msg = (
                 "Could not connect to Amazon Bedrock. Make sure the AWS environment is configured correctly. "
                 "See https://boto3.amazonaws.com/v1/documentation/api/latest/guide/quickstart.html#configuration"
             )
             raise AmazonBedrockConfigurationError(msg) from exception
-
-        self.model = model
-        self.aws_access_key_id = aws_access_key_id
-        self.aws_secret_access_key = aws_secret_access_key
-        self.aws_session_token = aws_session_token
-        self.aws_region_name = aws_region_name
-        self.aws_profile_name = aws_profile_name
-        self.batch_size = batch_size
-        self.progress_bar = progress_bar
-        self.meta_fields_to_embed = meta_fields_to_embed or []
-        self.embedding_separator = embedding_separator
-        self.kwargs = kwargs
 
     def _prepare_texts_to_embed(self, documents: List[Document]) -> List[str]:
         """
@@ -269,6 +275,7 @@ class AmazonBedrockDocumentEmbedder:
             progress_bar=self.progress_bar,
             meta_fields_to_embed=self.meta_fields_to_embed,
             embedding_separator=self.embedding_separator,
+            boto3_config=self.boto3_config,
             **self.kwargs,
         )
 

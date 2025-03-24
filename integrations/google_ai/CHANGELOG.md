@@ -1,5 +1,54 @@
 # Changelog
 
+## [integrations/google_ai-v5.1.0] - 2025-01-30
+
+### 🚀 Features
+
+- Google AI Chat Generator - add tool config + improvements (#1333)
+
+
+## [integrations/google_ai-v5.0.1] - 2025-01-23
+
+### 🚜 Refactor
+
+- GoogleAIGeminiGenerator - make some attributes public (#1317)
+
+
+## [integrations/google_ai-v5.0.0] - 2025-01-23
+
+### 🚀 Features
+
+- [**breaking**] Google AI - support for Tool + general refactoring (#1316)
+
+
+## [integrations/google_ai-v4.1.0] - 2025-01-16
+
+### 🧹 Chores
+
+- Google-ai - gently handle the removal of function role (#1297)
+
+
+## [integrations/google_ai-v4.0.1] - 2024-12-19
+
+### 🐛 Bug Fixes
+
+- Make GoogleAI Chat Generator compatible with new `ChatMessage`; small fixes to Cohere tests (#1253)
+
+
+## [integrations/google_ai-v4.0.0] - 2024-12-10
+
+### 🐛 Bug Fixes
+
+- GoogleAI - fix the content type of `ChatMessage` `content` from function (#1241)
+
+### 🧹 Chores
+
+- Fix linting/isort (#1215)
+
+### 🌀 Miscellaneous
+
+- Chore: use class methods to create `ChatMessage` (#1222)
+
 ## [integrations/google_ai-v3.0.2] - 2024-11-19
 
 ### 🐛 Bug Fixes

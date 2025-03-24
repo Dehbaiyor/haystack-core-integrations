@@ -1,5 +1,55 @@
 # Changelog
 
+## [integrations/pgvector-v3.1.0] - 2025-03-20
+
+### 🚀 Features
+
+- Pgvector - async support (+ refactoring) (#1547)
+
+### ⚙️ CI
+
+- Review testing workflows (#1541)
+
+## [integrations/pgvector-v3.0.1] - 2025-03-12
+
+### 🌀 Miscellaneous
+
+- Fix: pgvector - improve `_create_table_if_not_exists` to be used without admin rights (#1490)
+
+## [integrations/pgvector-v3.0.0] - 2025-03-11
+
+
+### 🧹 Chores
+
+- Remove Python 3.8 support (#1421)
+- Use Haystack logging across integrations (#1484)
+- Pgvector - pin haystack and remove dataframe checks (#1518)
+
+## [integrations/pgvector-v2.0.0] - 2025-02-13
+
+### 🧹 Chores
+
+- Pgvector - remove support for dataframe (#1370)
+
+
+## [integrations/pgvector-v1.3.0] - 2025-02-03
+
+### 🚀 Features
+
+- Pgvector - add like and not like filters (#1341)
+
+### 🧹 Chores
+
+- Inherit from `FilterDocumentsTestWithDataframe` in Document Stores (#1290)
+
+
+## [integrations/pgvector-v1.2.1] - 2025-01-10
+
+### 🐛 Bug Fixes
+
+- PgvectorDocumentStore - use appropriate schema name if dropping index (#1277)
+
+
 ## [integrations/pgvector-v1.2.0] - 2024-11-22
 
 ### 🚀 Features
