@@ -15,6 +15,7 @@ from psycopg.cursor import Cursor
 from psycopg.rows import dict_row
 from psycopg.sql import SQL, Identifier
 from psycopg.sql import Literal as SQLLiteral
+from psycopg import sql
 
 from pgvector.psycopg import register_vector, register_vector_async
 
@@ -80,8 +81,8 @@ class PgvectorDocumentStore:
         schema_name: str = "public",
         table_name: str = "haystack_documents",
         language: str = "english",
-        embedding_dimension: int = 768,
-        vector_function: Literal["cosine_similarity", "inner_product", "l2_distance"] = "cosine_similarity",
+        embedding_dimension: int = 1536,
+        vector_function: Literal["cosine_similarity", "inner_product", "l2_distance"] = "inner_product",
         recreate_table: bool = False,
         search_strategy: Literal["exact_nearest_neighbor", "hnsw"] = "exact_nearest_neighbor",
         hnsw_recreate_index_if_exists: bool = False,
@@ -89,6 +90,7 @@ class PgvectorDocumentStore:
         hnsw_index_name: str = "haystack_hnsw_index",
         hnsw_ef_search: Optional[int] = None,
         keyword_index_name: str = "haystack_keyword_index",
+        metadata_schema: Optional[Dict[str, str]] = None,
     ):
         """
         Creates a new PgvectorDocumentStore instance.
@@ -138,6 +140,11 @@ class PgvectorDocumentStore:
             `"hnsw"`. You can find more information about this parameter in the
             [pgvector documentation](https://github.com/pgvector/pgvector?tab=readme-ov-file#hnsw).
         :param keyword_index_name: Index name for the Keyword index.
+        :param metadata_schema: A dictionary mapping metadata field names to their PostgreSQL types (e.g.,
+            `{\"author\": \"TEXT\", \"year\": \"INTEGER\"}`). If provided, these fields will be stored in separate
+            columns. If `None` (default), metadata is stored in a single JSONB column named 'meta'.
+            Column names derived from metadata keys will be sanitized by replacing non-alphanumeric
+            characters with underscores. Ensure provided types are valid PostgreSQL types.
         """
 
         self.connection_string = connection_string
@@ -157,6 +164,10 @@ class PgvectorDocumentStore:
         self.hnsw_ef_search = hnsw_ef_search
         self.keyword_index_name = keyword_index_name
         self.language = language
+        # Store the original schema before sanitization
+        self.original_metadata_schema = metadata_schema
+        # Store the sanitized metadata schema (keys are sanitized for SQL column names)
+        self.sanitized_metadata_schema = self._sanitize_metadata_schema(metadata_schema) if metadata_schema else None
 
         self._connection = None
         self._async_connection = None
@@ -189,6 +200,8 @@ class PgvectorDocumentStore:
             hnsw_ef_search=self.hnsw_ef_search,
             keyword_index_name=self.keyword_index_name,
             language=self.language,
+            # Serialize original metadata_schema (sanitized version is derived)
+            metadata_schema=self.original_metadata_schema,
         )
 
     @classmethod
@@ -201,7 +214,8 @@ class PgvectorDocumentStore:
         :returns:
             Deserialized component.
         """
-        deserialize_secrets_inplace(data["init_parameters"], ["connection_string"])
+        init_params = data.get("init_parameters", {})
+        deserialize_secrets_inplace(init_params, ["connection_string"])
         return default_from_dict(cls, data)
 
     @staticmethod
@@ -369,13 +383,44 @@ class PgvectorDocumentStore:
     def _build_table_creation_queries(self):
         """
         Internal method to build the SQL queries for table creation.
+        Dynamically builds the CREATE TABLE statement based on metadata_schema.
         """
 
         sql_table_exists = SQL("SELECT 1 FROM pg_tables WHERE schemaname = %s AND tablename = %s")
-        sql_create_table = SQL(CREATE_TABLE_STATEMENT).format(
+
+        # Start building the CREATE TABLE statement dynamically
+        column_definitions = [
+            SQL("id VARCHAR(128) PRIMARY KEY"),
+            SQL("embedding VECTOR({embedding_dimension})").format(embedding_dimension=SQLLiteral(self.embedding_dimension)),
+            SQL("content TEXT"),
+            SQL("blob_data BYTEA"),
+            SQL("blob_meta JSONB"),
+            SQL("blob_mime_type VARCHAR(255)"),
+        ]
+
+        # Add columns based on metadata_schema if provided
+        if self.sanitized_metadata_schema:
+            logger.info(f"Using metadata_schema to create flat columns: {self.sanitized_metadata_schema}")
+            # Use sanitized keys for column names and assume types are valid SQL
+            for sanitized_key, sql_type in self.sanitized_metadata_schema.items():
+                # Basic validation/warning for type - could be enhanced
+                if not isinstance(sql_type, str) or not sql_type.isalnum():
+                     logger.warning(f"Potential issue with SQL type '{sql_type}' for metadata column '{sanitized_key}'. Ensure it's a valid PostgreSQL type.")
+                # Use SQL() to safely include the type string, and Identifier for the column name
+                column_definitions.append(SQL("{col_name} {col_type}").format(
+                    col_name=Identifier(sanitized_key),
+                    col_type=SQL(sql_type) # Assume sql_type is a valid SQL type string
+                ))
+        else:
+            # Fallback: If no metadata_schema, add the original JSONB meta column
+            logger.info("No metadata_schema provided, using single 'meta' JSONB column.")
+            column_definitions.append(SQL("meta JSONB"))
+
+        # Combine column definitions into the final CREATE TABLE statement
+        sql_create_table = SQL("CREATE TABLE {schema_name}.{table_name} ({columns})").format(
             schema_name=Identifier(self.schema_name),
             table_name=Identifier(self.table_name),
-            embedding_dimension=SQLLiteral(self.embedding_dimension),
+            columns=SQL(", ").join(column_definitions)
         )
 
         sql_keyword_index_exists = SQL(
@@ -661,7 +706,11 @@ class PgvectorDocumentStore:
 
         params = ()
         if filters:
-            sql_where_clause, params = _convert_filters_to_where_clause_and_params(filters)
+            sql_where_clause, params = _convert_filters_to_where_clause_and_params(
+                filters=filters,
+                original_schema=self.original_metadata_schema,
+                sanitized_schema=self.sanitized_metadata_schema
+            )
             sql_filter += sql_where_clause
 
         self._ensure_db_setup()
@@ -697,7 +746,11 @@ class PgvectorDocumentStore:
 
         params = ()
         if filters:
-            sql_where_clause, params = _convert_filters_to_where_clause_and_params(filters)
+            sql_where_clause, params = _convert_filters_to_where_clause_and_params(
+                filters=filters,
+                original_schema=self.original_metadata_schema,
+                sanitized_schema=self.sanitized_metadata_schema
+            )
             sql_filter += sql_where_clause
 
         await self._ensure_db_setup_async()
@@ -712,22 +765,85 @@ class PgvectorDocumentStore:
         docs = _from_pg_to_haystack_documents(records)
         return docs
 
-    def _build_insert_statement(self, policy: DuplicatePolicy):
+    def _build_insert_statement(self, policy: DuplicatePolicy) -> sql.Composed:
         """
-        Builds the SQL insert statement to write documents.
+        Builds the SQL insert statement to write documents, potentially including
+        dynamic columns based on metadata_schema.
         """
-        sql_insert = SQL(INSERT_STATEMENT).format(
-            schema_name=Identifier(self.schema_name), table_name=Identifier(self.table_name)
+        # Base columns that are always present
+        columns = [
+            Identifier("id"),
+            Identifier("embedding"),
+            Identifier("content"),
+            Identifier("blob_data"),
+            Identifier("blob_meta"),
+            Identifier("blob_mime_type"),
+        ]
+        # Corresponding placeholders
+        placeholders = [
+            SQL("%(id)s"),
+            SQL("%(embedding)s"),
+            SQL("%(content)s"),
+            SQL("%(blob_data)s"),
+            SQL("%(blob_meta)s"),
+            SQL("%(blob_mime_type)s"),
+        ]
+
+        # Add metadata columns if schema is defined
+        if self.sanitized_metadata_schema:
+            sanitized_meta_keys = [Identifier(key) for key in self.sanitized_metadata_schema.keys()]
+            columns.extend(sanitized_meta_keys)
+            placeholders.extend([SQL(f"%({key})s") for key in self.sanitized_metadata_schema.keys()])
+            logger.debug(f"Building INSERT for flat metadata columns: {sanitized_meta_keys}")
+        else:
+            # Otherwise, add the single 'meta' JSONB column
+            columns.append(Identifier("meta"))
+            placeholders.append(SQL("%(meta)s"))
+            logger.debug("Building INSERT for single 'meta' JSONB column")
+
+
+        # Build the main INSERT INTO ... VALUES ... part
+        sql_insert = SQL("INSERT INTO {schema_name}.{table_name} ({columns}) VALUES ({placeholders})").format(
+            schema_name=Identifier(self.schema_name),
+            table_name=Identifier(self.table_name),
+            columns=SQL(", ").join(columns),
+            placeholders=SQL(", ").join(placeholders),
         )
 
+        # Build the ON CONFLICT part based on the policy
         if policy == DuplicatePolicy.OVERWRITE:
-            sql_insert += SQL(UPDATE_STATEMENT)
+            # Build "SET col1 = EXCLUDED.col1, col2 = EXCLUDED.col2, ..."
+            # Exclude 'id' column from update set
+            update_columns = columns[1:] # Skip 'id'
+            update_assignments = []
+            for col in update_columns:
+                 # col is already an Identifier
+                update_assignments.append(SQL("{col} = EXCLUDED.{col}").format(col=col))
+
+            sql_conflict = SQL(" ON CONFLICT (id) DO UPDATE SET ") + SQL(", ").join(update_assignments)
+            sql_insert += sql_conflict
+            logger.debug("Using ON CONFLICT DO UPDATE policy")
         elif policy == DuplicatePolicy.SKIP:
-            sql_insert += SQL("ON CONFLICT DO NOTHING")
+            sql_insert += SQL(" ON CONFLICT (id) DO NOTHING")
+            logger.debug("Using ON CONFLICT DO NOTHING policy")
+        elif policy == DuplicatePolicy.FAIL:
+             # Default behavior of INSERT is to fail on conflict, so no extra clause needed
+             logger.debug("Using ON CONFLICT FAIL policy (default INSERT behavior)")
+             pass # No additional clause needed
+
 
         sql_insert += SQL(" RETURNING id")
 
-        return sql_insert
+        # Ensure the final query is a Composed object for executemany
+        if isinstance(sql_insert, str):
+             # This case shouldn't typically happen with psycopg3 sql module usage, but as a safeguard
+             return sql.SQL(sql_insert)
+        elif isinstance(sql_insert, sql.Composed):
+             return sql_insert
+        else:
+             # Wrap other SQL objects if necessary
+             return sql.Composed([sql_insert])
+
 
     def write_documents(self, documents: List[Document], policy: DuplicatePolicy = DuplicatePolicy.NONE) -> int:
         """
@@ -749,7 +865,8 @@ class PgvectorDocumentStore:
         if policy == DuplicatePolicy.NONE:
             policy = DuplicatePolicy.FAIL
 
-        db_documents = _from_haystack_to_pg_documents(documents)
+        # Pass both original and sanitized metadata_schema to the conversion function
+        db_documents = _from_haystack_to_pg_documents(documents, self.original_metadata_schema, self.sanitized_metadata_schema)
 
         sql_insert = self._build_insert_statement(policy)
 
@@ -806,7 +923,8 @@ class PgvectorDocumentStore:
         if policy == DuplicatePolicy.NONE:
             policy = DuplicatePolicy.FAIL
 
-        db_documents = _from_haystack_to_pg_documents(documents)
+        # Pass both original and sanitized metadata_schema to the conversion function
+        db_documents = _from_haystack_to_pg_documents(documents, self.original_metadata_schema, self.sanitized_metadata_schema)
 
         sql_insert = self._build_insert_statement(policy)
 
@@ -891,7 +1009,9 @@ class PgvectorDocumentStore:
         sql_where_clause = SQL("")
         if filters:
             sql_where_clause, where_params = _convert_filters_to_where_clause_and_params(
-                filters=filters, operator="AND"
+                filters=filters, operator="AND",
+                original_schema=self.original_metadata_schema,
+                sanitized_schema=self.sanitized_metadata_schema
             )
 
         sql_sort = SQL(" ORDER BY score DESC LIMIT {top_k}").format(top_k=SQLLiteral(top_k))
@@ -1010,7 +1130,11 @@ class PgvectorDocumentStore:
         sql_where_clause = SQL("")
         params = ()
         if filters:
-            sql_where_clause, params = _convert_filters_to_where_clause_and_params(filters)
+            sql_where_clause, params = _convert_filters_to_where_clause_and_params(
+                filters=filters,
+                original_schema=self.original_metadata_schema,
+                sanitized_schema=self.sanitized_metadata_schema
+            )
 
         # we always want to return the most similar documents first
         # so when using l2_distance, the sort order must be ASC
@@ -1086,3 +1210,30 @@ class PgvectorDocumentStore:
         records = await result.fetchall()
         docs = _from_pg_to_haystack_documents(records)
         return docs
+
+    # Helper method to sanitize metadata keys into valid SQL column names
+    def _sanitize_metadata_keys(self, keys: List[str]) -> List[Identifier]:
+        sanitized_keys = []
+        for key in keys:
+            # Replace non-alphanumeric characters with underscores
+            # Ensure it starts with a letter or underscore
+            sanitized = ''.join(c if c.isalnum() or c == '_' else '_' for c in key)
+            if not sanitized or not (sanitized[0].isalpha() or sanitized[0] == '_'):
+                sanitized = '_' + sanitized
+            # Truncate to PostgreSQL's default max identifier length (63) if necessary
+            sanitized_keys.append(Identifier(sanitized[:63]))
+        return sanitized_keys
+
+    # Helper method to sanitize the entire metadata schema dictionary
+    def _sanitize_metadata_schema(self, schema: Dict[str, str]) -> Dict[str, str]:
+        sanitized_schema = {}
+        for key, value in schema.items():
+            # Replace non-alphanumeric characters with underscores
+            # Ensure it starts with a letter or underscore
+            sanitized_key = ''.join(c if c.isalnum() or c == '_' else '_' for c in key)
+            if not sanitized_key or not (sanitized_key[0].isalpha() or sanitized_key[0] == '_'):
+                sanitized_key = '_' + sanitized_key
+            # Truncate to PostgreSQL's default max identifier length (63) if necessary
+            # We store the sanitized key string here, not the Identifier yet
+            sanitized_schema[sanitized_key[:63]] = value
+        return sanitized_schema
