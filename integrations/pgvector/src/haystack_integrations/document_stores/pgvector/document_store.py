@@ -484,7 +484,7 @@ class PgvectorDocumentStore:
                     table_name=Identifier(self.table_name),
                     column_name=sanitized_key_identifier,
                 )
-                metadata_index_queries[index_name_identifier] = sql_create_meta_index
+                metadata_index_queries[index_name_str] = sql_create_meta_index # Use the string index name as key
                 logger.debug(f"Generated CREATE INDEX statement for metadata field: {original_key} (column: {sanitized_key}, index: {index_name_str})")
         elif self.metadata_to_index and not self.sanitized_metadata_schema:
              # Only add index on the 'meta' JSONB column if specified and not using flat schema
@@ -503,7 +503,7 @@ class PgvectorDocumentStore:
                      table_name=Identifier(self.table_name),
                      column_name=Identifier("meta"), # Index the 'meta' column
                  )
-                 metadata_index_queries[index_name_identifier] = sql_create_meta_index
+                 metadata_index_queries[index_name_str] = sql_create_meta_index # Use the string index name as key
              else:
                 logger.warning("'metadata_to_index' is provided, but 'metadata_schema' is not. Cannot create indices for specific keys. Only 'meta' can be indexed.")
 
