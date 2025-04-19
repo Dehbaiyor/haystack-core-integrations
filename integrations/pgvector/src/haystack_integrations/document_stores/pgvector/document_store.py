@@ -1041,7 +1041,7 @@ class PgvectorDocumentStore:
         while True:
             if self.cursor.fetchone():
                 written_docs += 1
-            if not self.cursor.nextset():
+            if not self._cursor.nextset():
                 break
 
         return written_docs
