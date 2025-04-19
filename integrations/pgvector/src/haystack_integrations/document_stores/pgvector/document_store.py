@@ -939,7 +939,7 @@ class PgvectorDocumentStore:
             # Also EXCLUDE the 'content_fts' column as it's generated
             update_columns = []
             for col in columns: # Iterate through the columns we are *inserting*
-                if col.string != 'id': # Don't update id on conflict
+                if str(col) != 'id': # Don't update id on conflict
                     update_columns.append(col)
 
             update_assignments = []
@@ -1161,7 +1161,7 @@ class PgvectorDocumentStore:
                 sanitized_schema=self.sanitized_metadata_schema
             )
             # Prepend AND to the filter clause if it's not empty
-            if filter_where_clause.string.strip():
+            if filter_where_clause:
                  sql_where_clause = SQL(" AND ") + filter_where_clause
 
 
