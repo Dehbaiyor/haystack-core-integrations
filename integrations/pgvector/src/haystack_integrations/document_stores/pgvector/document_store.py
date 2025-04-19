@@ -1039,7 +1039,7 @@ class PgvectorDocumentStore:
         # https://www.psycopg.org/psycopg3/docs/api/cursors.html#psycopg.Cursor.executemany
         written_docs = 0
         while True:
-            if self.cursor.fetchone():
+            if self._cursor.fetchone():
                 written_docs += 1
             if not self._cursor.nextset():
                 break
