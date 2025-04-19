@@ -1404,3 +1404,152 @@ class PgvectorDocumentStore:
             # We store the sanitized key string here, not the Identifier yet
             sanitized_schema[sanitized_key] = value
         return sanitized_schema
+    
+    def create_index_if_not_exists(
+        self, 
+        index_name: str, 
+        where_condition: str,
+        vector_function: Optional[Literal["cosine_similarity", "inner_product", "l2_distance"]] = None,
+        index_creation_kwargs: Optional[Dict[str, int]] = None
+    ) -> bool:
+        """
+        Creates a partial HNSW index on the embedding column if it doesn't exist already.
+        Partial indexes are useful for optimizing queries that frequently filter on specific conditions.
+
+        :param index_name: Name for the index
+        :param where_condition: SQL WHERE condition to use for the partial index
+        :param vector_function: The vector similarity function to use
+        :param index_creation_kwargs: Optional parameters for HNSW index creation (e.g., {'m': 16, 'ef_construction': 64})
+        :returns: True if index was created, False if it already existed
+        """
+        vector_function = vector_function or self.vector_function
+        if vector_function not in VALID_VECTOR_FUNCTIONS:
+            msg = f"vector_function must be one of {VALID_VECTOR_FUNCTIONS}, but got {vector_function}"
+            raise ValueError(msg)
+        
+        # Get the PostgreSQL operator for the vector function
+        pg_ops = VECTOR_FUNCTION_TO_POSTGRESQL_OPS[vector_function]
+        
+        # Check if index exists
+        sql_index_exists = SQL(
+            "SELECT 1 FROM pg_indexes WHERE schemaname = %s AND tablename = %s AND indexname = %s"
+        )
+        
+        self._ensure_db_setup()
+        index_exists = bool(
+            self._execute_sql(
+                sql_index_exists,
+                (self.schema_name, self.table_name, index_name),
+                f"Could not check if index {index_name} exists",
+            ).fetchone()
+        )
+        
+        if index_exists:
+            logger.info(f"Index {index_name} already exists")
+            return False
+            
+        # Build CREATE INDEX query
+        # Use CREATE INDEX CONCURRENTLY for non-blocking creation
+        sql_create_index = SQL(
+            "CREATE INDEX CONCURRENTLY {index_name} ON {schema_name}.{table_name} "
+            "USING hnsw (embedding {ops}) WHERE ({where_condition})"
+        ).format(
+            schema_name=Identifier(self.schema_name),
+            index_name=Identifier(index_name),
+            table_name=Identifier(self.table_name),
+            ops=SQL(pg_ops),
+            where_condition=SQL(where_condition)
+        )
+        
+        # Add creation kwargs if any valid ones exist
+        valid_kwargs = {}
+        if index_creation_kwargs:
+            valid_kwargs = {
+                k: v for k, v in index_creation_kwargs.items() 
+                if k in HNSW_INDEX_CREATION_VALID_KWARGS
+            }
+            
+        if valid_kwargs:
+            kwargs_str = ", ".join(f"{k} = {v}" for k, v in valid_kwargs.items())
+            sql_create_index += SQL(" WITH ({})").format(SQL(kwargs_str))
+        
+        # Create the index
+        self._execute_sql(sql_create_index, error_msg=f"Could not create partial HNSW index {index_name}")
+        logger.info(f"Created partial HNSW index {index_name}")
+        return True
+        
+    async def create_index_if_not_exists_async(
+        self, 
+        index_name: str, 
+        where_condition: str,
+        vector_function: Optional[Literal["cosine_similarity", "inner_product", "l2_distance"]] = None,
+        index_creation_kwargs: Optional[Dict[str, int]] = None
+    ) -> bool:
+        """
+        Asynchronously creates a partial HNSW index on the embedding column if it doesn't exist already.
+        Partial indexes are useful for optimizing queries that frequently filter on specific conditions.
+
+        :param index_name: Name for the index
+        :param where_condition: SQL WHERE condition to use for the partial index
+        :param vector_function: The vector similarity function to use
+        :param index_creation_kwargs: Optional parameters for HNSW index creation (e.g., {'m': 16, 'ef_construction': 64})
+        :returns: True if index was created, False if it already existed
+        """
+        vector_function = vector_function or self.vector_function
+        if vector_function not in VALID_VECTOR_FUNCTIONS:
+            msg = f"vector_function must be one of {VALID_VECTOR_FUNCTIONS}, but got {vector_function}"
+            raise ValueError(msg)
+        
+        # Get the PostgreSQL operator for the vector function
+        pg_ops = VECTOR_FUNCTION_TO_POSTGRESQL_OPS[vector_function]
+        
+        # Check if index exists
+        sql_index_exists = SQL(
+            "SELECT 1 FROM pg_indexes WHERE schemaname = %s AND tablename = %s AND indexname = %s"
+        )
+        
+        await self._ensure_db_setup_async()
+        index_exists = bool(
+            await (
+                await self._execute_sql_async(
+                    sql_index_exists,
+                    (self.schema_name, self.table_name, index_name),
+                    f"Could not check if index {index_name} exists",
+                    self._async_cursor,
+                )
+            ).fetchone()
+        )
+        
+        if index_exists:
+            logger.info(f"Index {index_name} already exists")
+            return False
+            
+        # Build CREATE INDEX query
+        # Use CREATE INDEX CONCURRENTLY for non-blocking creation
+        sql_create_index = SQL(
+            "CREATE INDEX CONCURRENTLY {index_name} ON {schema_name}.{table_name} "
+            "USING hnsw (embedding {ops}) WHERE ({where_condition})"
+        ).format(
+            schema_name=Identifier(self.schema_name),
+            index_name=Identifier(index_name),
+            table_name=Identifier(self.table_name),
+            ops=SQL(pg_ops),
+            where_condition=SQL(where_condition)
+        )
+        
+        # Add creation kwargs if any valid ones exist
+        valid_kwargs = {}
+        if index_creation_kwargs:
+            valid_kwargs = {
+                k: v for k, v in index_creation_kwargs.items() 
+                if k in HNSW_INDEX_CREATION_VALID_KWARGS
+            }
+            
+        if valid_kwargs:
+            kwargs_str = ", ".join(f"{k} = {v}" for k, v in valid_kwargs.items())
+            sql_create_index += SQL(" WITH ({})").format(SQL(kwargs_str))
+        
+        # Create the index
+        await self._execute_sql_async(sql_create_index, error_msg=f"Could not create partial HNSW index {index_name}")
+        logger.info(f"Created partial HNSW index {index_name}")
+        return True
