@@ -1038,10 +1038,11 @@ class PgvectorDocumentStore:
         # get the number of the inserted documents, inspired by psycopg3 docs
         # https://www.psycopg.org/psycopg3/docs/api/cursors.html#psycopg.Cursor.executemany
         written_docs = 0
-        # Iterate through the results returned by executemany with returning=True
-        # The cursor manages moving between result sets automatically when iterated.
-        for _ in self._cursor:
-            written_docs += 1
+        while True:
+            if self.cursor.fetchone():
+                written_docs += 1
+            if not self.cursor.nextset():
+                break
 
         return written_docs
 
