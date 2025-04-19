@@ -91,6 +91,7 @@ class PgvectorDocumentStore:
         hnsw_ef_search: Optional[int] = None,
         keyword_index_name: str = "haystack_keyword_index",
         metadata_schema: Optional[Dict[str, str]] = None,
+        metadata_to_index: Optional[List[str]] = None,
     ):
         """
         Creates a new PgvectorDocumentStore instance.
@@ -145,6 +146,8 @@ class PgvectorDocumentStore:
             columns. If `None` (default), metadata is stored in a single JSONB column named 'meta'.
             Column names derived from metadata keys will be sanitized by replacing non-alphanumeric
             characters with underscores. Ensure provided types are valid PostgreSQL types.
+        :param metadata_to_index: A list of metadata field names to index. If provided, only these fields will be indexed.
+            If `None` (default), all metadata fields will be indexed.
         """
 
         self.connection_string = connection_string
@@ -168,6 +171,7 @@ class PgvectorDocumentStore:
         self.original_metadata_schema = metadata_schema
         # Store the sanitized metadata schema (keys are sanitized for SQL column names)
         self.sanitized_metadata_schema = self._sanitize_metadata_schema(metadata_schema) if metadata_schema else None
+        self.metadata_to_index = metadata_to_index
 
         self._connection = None
         self._async_connection = None
@@ -382,8 +386,9 @@ class PgvectorDocumentStore:
 
     def _build_table_creation_queries(self):
         """
-        Internal method to build the SQL queries for table creation.
-        Dynamically builds the CREATE TABLE statement based on metadata_schema.
+        Internal method to build the SQL queries for table creation and indexing.
+        Dynamically builds the CREATE TABLE statement based on metadata_schema
+        and CREATE INDEX statements for specified metadata fields.
         """
 
         sql_table_exists = SQL("SELECT 1 FROM pg_tables WHERE schemaname = %s AND tablename = %s")
@@ -423,19 +428,89 @@ class PgvectorDocumentStore:
             columns=SQL(", ").join(column_definitions)
         )
 
-        sql_keyword_index_exists = SQL(
+        # Query to check if a specific index exists
+        sql_index_exists = SQL(
             "SELECT 1 FROM pg_indexes WHERE schemaname = %s AND tablename = %s AND indexname = %s"
         )
+
+        # --- Keyword Index ---
+        # Use the general index existence query for the keyword index too
+        keyword_index_name_identifier = Identifier(self.keyword_index_name)
+        # Use CREATE INDEX CONCURRENTLY for non-blocking creation
         sql_create_keyword_index = SQL(
-            "CREATE INDEX {index_name} ON {schema_name}.{table_name} USING GIN (to_tsvector({language}, content))"
+            "CREATE INDEX CONCURRENTLY {index_name} ON {schema_name}.{table_name} USING GIN (to_tsvector({language}, content))"
         ).format(
             schema_name=Identifier(self.schema_name),
-            index_name=Identifier(self.keyword_index_name),
+            index_name=keyword_index_name_identifier,
             table_name=Identifier(self.table_name),
             language=SQLLiteral(self.language),
         )
 
-        return sql_table_exists, sql_create_table, sql_keyword_index_exists, sql_create_keyword_index
+        # --- Metadata Indices ---
+        # Generate CREATE INDEX statements for metadata fields specified in metadata_to_index
+        metadata_index_queries = {} # Store as {index_name_identifier: create_sql}
+        if self.sanitized_metadata_schema and self.metadata_to_index:
+            # Get the sanitized keys corresponding to the original keys in metadata_to_index
+            # We need a mapping from original key -> sanitized key
+            original_to_sanitized = {k: sk for k, sk in self._sanitize_metadata_schema(self.original_metadata_schema).items()}
+
+            for original_key in self.metadata_to_index:
+                sanitized_key = original_to_sanitized.get(original_key)
+                if not sanitized_key:
+                    logger.warning(f"Metadata key '{original_key}' specified in 'metadata_to_index' not found in 'metadata_schema'. Skipping index creation.")
+                    continue
+                if sanitized_key not in self.sanitized_metadata_schema:
+                    logger.warning(f"Sanitized key '{sanitized_key}' (from original '{original_key}') not found in sanitized schema. Skipping index creation.")
+                    continue
+
+                # Generate a predictable index name
+                index_name_str = f"idx_{self.table_name}_{sanitized_key}"[:63] # Ensure valid length
+                index_name_identifier = Identifier(index_name_str)
+                sanitized_key_identifier = Identifier(sanitized_key)
+
+                # Basic index creation, assumes B-tree which is good for most types
+                # Consider allowing index type specification in the future
+                # Use CREATE INDEX CONCURRENTLY for non-blocking creation
+                sql_create_meta_index = SQL(
+                    "CREATE INDEX CONCURRENTLY {index_name} ON {schema_name}.{table_name} ({column_name})"
+                ).format(
+                    index_name=index_name_identifier,
+                    schema_name=Identifier(self.schema_name),
+                    table_name=Identifier(self.table_name),
+                    column_name=sanitized_key_identifier,
+                )
+                metadata_index_queries[index_name_identifier] = sql_create_meta_index
+                logger.debug(f"Generated CREATE INDEX statement for metadata field: {original_key} (column: {sanitized_key}, index: {index_name_str})")
+        elif self.metadata_to_index and not self.sanitized_metadata_schema:
+             # Only add index on the 'meta' JSONB column if specified and not using flat schema
+             if "meta" in self.metadata_to_index:
+                 logger.info("Creating GIN index on the 'meta' JSONB column as requested in 'metadata_to_index'.")
+                 # Generate a predictable index name
+                 index_name_str = f"idx_{self.table_name}_meta_jsonb"[:63] # Ensure valid length
+                 index_name_identifier = Identifier(index_name_str)
+                 # Use GIN index for JSONB for efficient querying of keys/values
+                 # Use CREATE INDEX CONCURRENTLY for non-blocking creation
+                 sql_create_meta_index = SQL(
+                     "CREATE INDEX CONCURRENTLY {index_name} ON {schema_name}.{table_name} USING GIN ({column_name})"
+                 ).format(
+                     index_name=index_name_identifier,
+                     schema_name=Identifier(self.schema_name),
+                     table_name=Identifier(self.table_name),
+                     column_name=Identifier("meta"), # Index the 'meta' column
+                 )
+                 metadata_index_queries[index_name_identifier] = sql_create_meta_index
+             else:
+                logger.warning("'metadata_to_index' is provided, but 'metadata_schema' is not. Cannot create indices for specific keys. Only 'meta' can be indexed.")
+
+
+        return (
+            sql_table_exists,
+            sql_create_table,
+            sql_index_exists, # Generic query to check index existence
+            keyword_index_name_identifier, # Name of the keyword index
+            sql_create_keyword_index, # SQL to create keyword index
+            metadata_index_queries, # Dictionary of {index_name: create_sql} for metadata
+        )
 
     def _initialize_table(self):
         """
@@ -444,9 +519,14 @@ class PgvectorDocumentStore:
         if self.recreate_table:
             self.delete_table()
 
-        sql_table_exists, sql_create_table, sql_keyword_index_exists, sql_create_keyword_index = (
-            self._build_table_creation_queries()
-        )
+        (
+            sql_table_exists,
+            sql_create_table,
+            sql_index_exists,
+            keyword_index_name,
+            sql_create_keyword_index,
+            metadata_index_queries,
+        ) = self._build_table_creation_queries()
 
         table_exists = bool(
             self._execute_sql(
@@ -458,13 +538,27 @@ class PgvectorDocumentStore:
 
         index_exists = bool(
             self._execute_sql(
-                sql_keyword_index_exists,
-                (self.schema_name, self.table_name, self.keyword_index_name),
+                sql_index_exists, # Use generic index check query
+                (self.schema_name, self.table_name, keyword_index_name.string), # Check for specific index name
                 "Could not check if keyword index exists",
             ).fetchone()
         )
         if not index_exists:
             self._execute_sql(sql_create_keyword_index, error_msg="Could not create keyword index on table")
+
+        # Create metadata indices if specified
+        for index_name, sql_create_meta_index in metadata_index_queries.items():
+            meta_index_exists = bool(
+                self._execute_sql(
+                    sql_index_exists, # Use generic index check query
+                    (self.schema_name, self.table_name, index_name.string), # Check for specific index name
+                    f"Could not check if metadata index '{index_name.string}' exists",
+                ).fetchone()
+            )
+            if not meta_index_exists:
+                self._execute_sql(sql_create_meta_index, error_msg=f"Could not create metadata index '{index_name.string}' on table")
+            else:
+                logger.info(f"Metadata index '{index_name.string}' already exists. Skipping creation.")
 
         if self.search_strategy == "hnsw":
             self._handle_hnsw()
@@ -478,9 +572,14 @@ class PgvectorDocumentStore:
         if self.recreate_table:
             await self.delete_table_async()
 
-        sql_table_exists, sql_create_table, sql_keyword_index_exists, sql_create_keyword_index = (
-            self._build_table_creation_queries()
-        )
+        (
+            sql_table_exists,
+            sql_create_table,
+            sql_index_exists,
+            keyword_index_name,
+            sql_create_keyword_index,
+            metadata_index_queries,
+        ) = self._build_table_creation_queries()
 
         table_exists = bool(
             await (
@@ -498,15 +597,33 @@ class PgvectorDocumentStore:
         index_exists = bool(
             await (
                 await self._execute_sql_async(
-                    sql_keyword_index_exists,
-                    (self.schema_name, self.table_name, self.keyword_index_name),
+                    sql_index_exists, # Use generic index check query
+                    (self.schema_name, self.table_name, keyword_index_name.string), # Check for specific index name
                     "Could not check if keyword index exists",
-                    self._async_cursor,
+                     self._async_cursor,
                 )
             ).fetchone()
         )
         if not index_exists:
             await self._execute_sql_async(sql_create_keyword_index, error_msg="Could not create keyword index on table")
+
+        # Create metadata indices if specified (async)
+        for index_name, sql_create_meta_index in metadata_index_queries.items():
+            meta_index_exists = bool(
+                 await (
+                    await self._execute_sql_async(
+                        sql_index_exists, # Use generic index check query
+                        (self.schema_name, self.table_name, index_name.string), # Check for specific index name
+                        f"Could not check if metadata index '{index_name.string}' exists",
+                         self._async_cursor,
+                    )
+                ).fetchone()
+            )
+            if not meta_index_exists:
+                 await self._execute_sql_async(sql_create_meta_index, error_msg=f"Could not create metadata index '{index_name.string}' on table")
+            else:
+                logger.info(f"Metadata index '{index_name.string}' already exists. Skipping creation.")
+
 
         if self.search_strategy == "hnsw":
             await self._handle_hnsw_async()
@@ -563,8 +680,9 @@ class PgvectorDocumentStore:
 
         pg_ops = VECTOR_FUNCTION_TO_POSTGRESQL_OPS[self.vector_function]
 
+        # Use CREATE INDEX CONCURRENTLY for non-blocking creation
         sql_create_hnsw_index = SQL(
-            "CREATE INDEX {index_name} ON {schema_name}.{table_name} USING hnsw (embedding {ops})"
+            "CREATE INDEX CONCURRENTLY {index_name} ON {schema_name}.{table_name} USING hnsw (embedding {ops})"
         ).format(
             schema_name=Identifier(self.schema_name),
             index_name=Identifier(self.hnsw_index_name),
