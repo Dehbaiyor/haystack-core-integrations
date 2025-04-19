@@ -388,7 +388,7 @@ class PgvectorDocumentStore:
         """
         Internal method to build the SQL queries for table creation and indexing.
         Dynamically builds the CREATE TABLE statement based on metadata_schema
-        and CREATE INDEX statements for specified metadata fields.
+        and CREATE INDEX statements for specified metadata fields and the FTS column.
         """
 
         sql_table_exists = SQL("SELECT 1 FROM pg_tables WHERE schemaname = %s AND tablename = %s")
@@ -398,6 +398,9 @@ class PgvectorDocumentStore:
             SQL("id VARCHAR(128) PRIMARY KEY"),
             SQL("embedding VECTOR({embedding_dimension})").format(embedding_dimension=SQLLiteral(self.embedding_dimension)),
             SQL("content TEXT"),
+            # Add the generated tsvector column using coalesce for safety
+            # The language parameter is crucial here.
+            SQL("content_fts tsvector GENERATED ALWAYS AS (to_tsvector({language}, coalesce(content, ''))) STORED").format(language=SQLLiteral(self.language)),
             SQL("blob_data BYTEA"),
             SQL("blob_meta JSONB"),
             SQL("blob_mime_type VARCHAR(255)"),
@@ -433,17 +436,16 @@ class PgvectorDocumentStore:
             "SELECT 1 FROM pg_indexes WHERE schemaname = %s AND tablename = %s AND indexname = %s"
         )
 
-        # --- Keyword Index ---
-        # Use the general index existence query for the keyword index too
+        # --- Keyword Index (on the new generated column) ---
         keyword_index_name_identifier = Identifier(self.keyword_index_name)
+        # Create the GIN index on the pre-generated 'content_fts' column
         # Use CREATE INDEX CONCURRENTLY for non-blocking creation
         sql_create_keyword_index = SQL(
-            "CREATE INDEX CONCURRENTLY {index_name} ON {schema_name}.{table_name} USING GIN (to_tsvector({language}, content))"
+            "CREATE INDEX CONCURRENTLY {index_name} ON {schema_name}.{table_name} USING GIN (content_fts)" # Index the generated column
         ).format(
             schema_name=Identifier(self.schema_name),
             index_name=keyword_index_name_identifier,
             table_name=Identifier(self.table_name),
-            language=SQLLiteral(self.language),
         )
 
         # --- Metadata Indices ---
@@ -887,8 +889,10 @@ class PgvectorDocumentStore:
         """
         Builds the SQL insert statement to write documents, potentially including
         dynamic columns based on metadata_schema.
+        NOTE: This does NOT include the generated 'content_fts' column, as it's
+              populated automatically by PostgreSQL.
         """
-        # Base columns that are always present
+        # Base columns that are always present (excluding generated columns like content_fts)
         columns = [
             Identifier("id"),
             Identifier("embedding"),
@@ -932,11 +936,20 @@ class PgvectorDocumentStore:
         if policy == DuplicatePolicy.OVERWRITE:
             # Build "SET col1 = EXCLUDED.col1, col2 = EXCLUDED.col2, ..."
             # Exclude 'id' column from update set
-            update_columns = columns[1:] # Skip 'id'
+            # Also EXCLUDE the 'content_fts' column as it's generated
+            update_columns = []
+            for col in columns: # Iterate through the columns we are *inserting*
+                if col.string != 'id': # Don't update id on conflict
+                    update_columns.append(col)
+
             update_assignments = []
             for col in update_columns:
                  # col is already an Identifier
+                 # Make sure we update based on EXCLUDED values for inserted columns
                 update_assignments.append(SQL("{col} = EXCLUDED.{col}").format(col=col))
+            # IMPORTANT: The generated column 'content_fts' will be updated automatically by PG
+            # when its dependent column ('content') is updated via EXCLUDED.content.
+            # We don't need to (and shouldn't) include it in the SET clause.
 
             sql_conflict = SQL(" ON CONFLICT (id) DO UPDATE SET ") + SQL(", ").join(update_assignments)
             sql_insert += sql_conflict
@@ -1121,29 +1134,45 @@ class PgvectorDocumentStore:
 
     def _build_keyword_retrieval_query(self, query: str, top_k: int, filters: Optional[Dict[str, Any]] = None):
         """
-        Builds the SQL query and the where parameters for keyword retrieval.
+        Builds the SQL query and the where parameters for keyword retrieval using
+        the pre-generated 'content_fts' tsvector column.
         """
-        sql_select = SQL(KEYWORD_QUERY).format(
+        sql_select = SQL(
+            """
+            SELECT {table_name}.*, ts_rank_cd(content_fts, query) AS score
+            FROM {schema_name}.{table_name}, plainto_tsquery({language}, %s) query
+            WHERE content_fts @@ query
+            """
+        ).format(
             schema_name=Identifier(self.schema_name),
             table_name=Identifier(self.table_name),
             language=SQLLiteral(self.language),
-            query=SQLLiteral(query),
         )
 
         where_params = ()
         sql_where_clause = SQL("")
         if filters:
-            sql_where_clause, where_params = _convert_filters_to_where_clause_and_params(
-                filters=filters, operator="AND",
+            # Filter conversion needs to happen *after* the FTS WHERE clause.
+            # We add it using AND.
+            filter_where_clause, where_params = _convert_filters_to_where_clause_and_params(
+                filters=filters,
+                operator="AND", # Use AND to combine with the FTS condition
                 original_schema=self.original_metadata_schema,
                 sanitized_schema=self.sanitized_metadata_schema
             )
+            # Prepend AND to the filter clause if it's not empty
+            if filter_where_clause.string.strip():
+                 sql_where_clause = SQL(" AND ") + filter_where_clause
+
 
         sql_sort = SQL(" ORDER BY score DESC LIMIT {top_k}").format(top_k=SQLLiteral(top_k))
 
+        # Combine: SELECT ... FROM ... WHERE FTS @@ query [AND filters] ORDER BY ... LIMIT ...
         sql_query = sql_select + sql_where_clause + sql_sort
 
-        return sql_query, where_params
+        # The parameters now consist of the user query string FIRST (for plainto_tsquery),
+        # followed by any parameters generated by the filter conversion.
+        return sql_query, where_params # Params for filters will be appended later when executing
 
     def _keyword_retrieval(
         self,
@@ -1153,25 +1182,30 @@ class PgvectorDocumentStore:
         top_k: int = 10,
     ) -> List[Document]:
         """
-        Retrieves documents that are most similar to the query using a full-text search.
+        Retrieves documents that match the query using a full-text search on the
+        pre-generated 'content_fts' column.
 
         This method is not meant to be part of the public interface of
         `PgvectorDocumentStore` and it should not be called directly.
         `PgvectorKeywordRetriever` uses this method directly and is the public interface for it.
 
-        :returns: List of Documents that are most similar to `query`
+        :returns: List of Documents that match the `query`
         """
         if not query:
             msg = "query must be a non-empty string"
             raise ValueError(msg)
 
-        sql_query, where_params = self._build_keyword_retrieval_query(query=query, top_k=top_k, filters=filters)
+        _validate_filters(filters) # Validate filters early
+
+        sql_query, filter_params = self._build_keyword_retrieval_query(query=query, top_k=top_k, filters=filters)
 
         self._ensure_db_setup()
+        # Execute with the query string first, then filter parameters
+        all_params = (query,) + filter_params
         result = self._execute_sql(
             sql_query,
-            (query, *where_params),
-            error_msg="Could not retrieve documents from PgvectorDocumentStore.",
+            all_params,
+            error_msg="Could not retrieve documents using keyword search from PgvectorDocumentStore.",
             cursor=self._dict_cursor,
         )
 
@@ -1187,19 +1221,24 @@ class PgvectorDocumentStore:
         top_k: int = 10,
     ) -> List[Document]:
         """
-        Retrieves documents that are most similar to the query using a full-text search asynchronously.
+        Asynchronously retrieves documents that match the query using a full-text search
+        on the pre-generated 'content_fts' column.
         """
         if not query:
             msg = "query must be a non-empty string"
             raise ValueError(msg)
 
-        sql_query, where_params = self._build_keyword_retrieval_query(query=query, top_k=top_k, filters=filters)
+        _validate_filters(filters) # Validate filters early
+
+        sql_query, filter_params = self._build_keyword_retrieval_query(query=query, top_k=top_k, filters=filters)
 
         await self._ensure_db_setup_async()
+        # Execute with the query string first, then filter parameters
+        all_params = (query,) + filter_params
         result = await self._execute_sql_async(
             sql_query,
-            (query, *where_params),
-            error_msg="Could not retrieve documents from PgvectorDocumentStore.",
+            all_params,
+            error_msg="Could not retrieve documents using keyword search from PgvectorDocumentStore.",
             cursor=self._async_dict_cursor,
         )
 
