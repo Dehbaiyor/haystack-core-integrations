@@ -477,7 +477,7 @@ class PgvectorDocumentStore:
                 # Consider allowing index type specification in the future
                 # Use CREATE INDEX CONCURRENTLY for non-blocking creation
                 sql_create_meta_index = SQL(
-                    "CREATE INDEX CONCURRENTLY {index_name} ON {schema_name}.{table_name} ({column_name}) WITH (fastupdate = off)"
+                    "CREATE INDEX CONCURRENTLY {index_name} ON {schema_name}.{table_name} ({column_name})"
                 ).format(
                     index_name=index_name_identifier,
                     schema_name=Identifier(self.schema_name),
