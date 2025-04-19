@@ -541,32 +541,36 @@ class PgvectorDocumentStore:
         if not table_exists:
             self._execute_sql(sql_create_table, error_msg="Could not create table")
 
-        index_exists = bool(
-            self._execute_sql(
-                sql_index_exists, # Use generic index check query
-                (self.schema_name, self.table_name, str(keyword_index_name)), # Check for specific index name
-                "Could not check if keyword index exists",
-            ).fetchone()
-        )
-        if not index_exists:
-            self._execute_sql(sql_create_keyword_index, error_msg="Could not create keyword index on table")
-
-        # Create metadata indices if specified
-        for index_name, sql_create_meta_index in metadata_index_queries.items():
-            meta_index_exists = bool(
+            # Only create indexes when creating a new table
+            index_exists = bool(
                 self._execute_sql(
                     sql_index_exists, # Use generic index check query
-                    (self.schema_name, self.table_name, str(index_name)), # Check for specific index name
-                    f"Could not check if metadata index '{str(index_name)}' exists",
+                    (self.schema_name, self.table_name, str(keyword_index_name)), # Check for specific index name
+                    "Could not check if keyword index exists",
                 ).fetchone()
             )
-            if not meta_index_exists:
-                self._execute_sql(sql_create_meta_index, error_msg=f"Could not create metadata index '{str(index_name)}' on table")
-            else:
-                logger.info(f"Metadata index '{str(index_name)}' already exists. Skipping creation.")
+            if not index_exists:
+                self._execute_sql(sql_create_keyword_index, error_msg="Could not create keyword index on table")
 
-        if self.search_strategy == "hnsw":
-            self._handle_hnsw()
+            # Create metadata indices if specified
+            for index_name, sql_create_meta_index in metadata_index_queries.items():
+                meta_index_exists = bool(
+                    self._execute_sql(
+                        sql_index_exists, # Use generic index check query
+                        (self.schema_name, self.table_name, str(index_name)), # Check for specific index name
+                        f"Could not check if metadata index '{str(index_name)}' exists",
+                    ).fetchone()
+                )
+                if not meta_index_exists:
+                    self._execute_sql(sql_create_meta_index, error_msg=f"Could not create metadata index '{str(index_name)}' on table")
+                else:
+                    logger.info(f"Metadata index '{str(index_name)}' already exists. Skipping creation.")
+
+            if self.search_strategy == "hnsw":
+                self._handle_hnsw()
+        else:
+            # If recreate_table is false and table exists, don't try to create any indexes
+            logger.info(f"Table {self.schema_name}.{self.table_name} already exists. Skipping index creation.")
 
         self._table_initialized = True
 
@@ -599,39 +603,42 @@ class PgvectorDocumentStore:
         if not table_exists:
             await self._execute_sql_async(sql_create_table, error_msg="Could not create table")
 
-        index_exists = bool(
-            await (
-                await self._execute_sql_async(
-                    sql_index_exists, # Use generic index check query
-                    (self.schema_name, self.table_name, str(keyword_index_name)), # Check for specific index name
-                    "Could not check if keyword index exists",
-                     self._async_cursor,
-                )
-            ).fetchone()
-        )
-        if not index_exists:
-            await self._execute_sql_async(sql_create_keyword_index, error_msg="Could not create keyword index on table")
-
-        # Create metadata indices if specified (async)
-        for index_name, sql_create_meta_index in metadata_index_queries.items():
-            meta_index_exists = bool(
-                 await (
+            # Only create indexes when creating a new table
+            index_exists = bool(
+                await (
                     await self._execute_sql_async(
                         sql_index_exists, # Use generic index check query
-                        (self.schema_name, self.table_name, str(index_name)), # Check for specific index name
-                        f"Could not check if metadata index '{str(index_name)}' exists",
+                        (self.schema_name, self.table_name, str(keyword_index_name)), # Check for specific index name
+                        "Could not check if keyword index exists",
                          self._async_cursor,
                     )
                 ).fetchone()
             )
-            if not meta_index_exists:
-                 await self._execute_sql_async(sql_create_meta_index, error_msg=f"Could not create metadata index '{str(index_name)}' on table")
-            else:
-                logger.info(f"Metadata index '{str(index_name)}' already exists. Skipping creation.")
+            if not index_exists:
+                await self._execute_sql_async(sql_create_keyword_index, error_msg="Could not create keyword index on table")
 
+            # Create metadata indices if specified (async)
+            for index_name, sql_create_meta_index in metadata_index_queries.items():
+                meta_index_exists = bool(
+                     await (
+                        await self._execute_sql_async(
+                            sql_index_exists, # Use generic index check query
+                            (self.schema_name, self.table_name, str(index_name)), # Check for specific index name
+                            f"Could not check if metadata index '{str(index_name)}' exists",
+                             self._async_cursor,
+                        )
+                    ).fetchone()
+                )
+                if not meta_index_exists:
+                     await self._execute_sql_async(sql_create_meta_index, error_msg=f"Could not create metadata index '{str(index_name)}' on table")
+                else:
+                    logger.info(f"Metadata index '{str(index_name)}' already exists. Skipping creation.")
 
-        if self.search_strategy == "hnsw":
-            await self._handle_hnsw_async()
+            if self.search_strategy == "hnsw":
+                await self._handle_hnsw_async()
+        else:
+            # If recreate_table is false and table exists, don't try to create any indexes
+            logger.info(f"Table {self.schema_name}.{self.table_name} already exists. Skipping index creation.")
 
         self._table_initialized = True
 
