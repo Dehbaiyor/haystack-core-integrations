@@ -441,7 +441,7 @@ class PgvectorDocumentStore:
         # Create the GIN index on the pre-generated 'content_fts' column
         # Use CREATE INDEX CONCURRENTLY for non-blocking creation
         sql_create_keyword_index = SQL(
-            "CREATE INDEX CONCURRENTLY {index_name} ON {schema_name}.{table_name} USING GIN (content_fts)" # Index the generated column
+            "CREATE INDEX CONCURRENTLY {index_name} ON {schema_name}.{table_name} USING GIN (content_fts) WITH (fastupdate = off)" # Index the generated column, disable fastupdate for compactness
         ).format(
             schema_name=Identifier(self.schema_name),
             index_name=keyword_index_name_identifier,
@@ -474,7 +474,7 @@ class PgvectorDocumentStore:
                 # Consider allowing index type specification in the future
                 # Use CREATE INDEX CONCURRENTLY for non-blocking creation
                 sql_create_meta_index = SQL(
-                    "CREATE INDEX CONCURRENTLY {index_name} ON {schema_name}.{table_name} ({column_name})"
+                    "CREATE INDEX CONCURRENTLY {index_name} ON {schema_name}.{table_name} ({column_name}) WITH (fastupdate = off)"
                 ).format(
                     index_name=index_name_identifier,
                     schema_name=Identifier(self.schema_name),
@@ -493,7 +493,7 @@ class PgvectorDocumentStore:
                  # Use GIN index for JSONB for efficient querying of keys/values
                  # Use CREATE INDEX CONCURRENTLY for non-blocking creation
                  sql_create_meta_index = SQL(
-                     "CREATE INDEX CONCURRENTLY {index_name} ON {schema_name}.{table_name} USING GIN ({column_name})"
+                     "CREATE INDEX CONCURRENTLY {index_name} ON {schema_name}.{table_name} USING GIN ({column_name}) WITH (fastupdate = off)"
                  ).format(
                      index_name=index_name_identifier,
                      schema_name=Identifier(self.schema_name),
