@@ -868,6 +868,10 @@ class PgvectorDocumentStore:
         # Pass both original and sanitized metadata_schema to the conversion function
         db_documents = _from_haystack_to_pg_documents(documents, self.original_metadata_schema, self.sanitized_metadata_schema)
 
+        # If no documents result from the conversion (e.g., filtering), return early.
+        if not db_documents:
+            return 0
+
         sql_insert = self._build_insert_statement(policy)
 
         self._ensure_db_setup()
@@ -924,6 +928,10 @@ class PgvectorDocumentStore:
 
         # Pass both original and sanitized metadata_schema to the conversion function
         db_documents = _from_haystack_to_pg_documents(documents, self.original_metadata_schema, self.sanitized_metadata_schema)
+
+        # If no documents result from the conversion (e.g., filtering), return early.
+        if not db_documents:
+            return 0
 
         sql_insert = self._build_insert_statement(policy)
 
