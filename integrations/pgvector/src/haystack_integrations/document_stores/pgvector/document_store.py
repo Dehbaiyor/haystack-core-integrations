@@ -454,15 +454,18 @@ class PgvectorDocumentStore:
         if self.sanitized_metadata_schema and self.metadata_to_index:
             # Get the sanitized keys corresponding to the original keys in metadata_to_index
             # We need a mapping from original key -> sanitized key
-            original_to_sanitized = {k: sk for k, sk in self._sanitize_metadata_schema(self.original_metadata_schema).items()}
+            # Correctly create the mapping: original_key -> sanitized_key
+            # The _sanitize_metadata_schema method already returns {sanitized_key: original_type},
+            # but we need {original_key: sanitized_key}. We must re-sanitize the original keys.
+            original_to_sanitized = {
+                original_key: self._sanitize_key_to_str(original_key) # Use the string helper
+                for original_key in self.original_metadata_schema.keys()
+            }
 
             for original_key in self.metadata_to_index:
                 sanitized_key = original_to_sanitized.get(original_key)
                 if not sanitized_key:
                     logger.warning(f"Metadata key '{original_key}' specified in 'metadata_to_index' not found in 'metadata_schema'. Skipping index creation.")
-                    continue
-                if sanitized_key not in self.sanitized_metadata_schema:
-                    logger.warning(f"Sanitized key '{sanitized_key}' (from original '{original_key}') not found in sanitized schema. Skipping index creation.")
                     continue
 
                 # Generate a predictable index name
@@ -1375,29 +1378,22 @@ class PgvectorDocumentStore:
         docs = _from_pg_to_haystack_documents(records)
         return docs
 
-    # Helper method to sanitize metadata keys into valid SQL column names
-    def _sanitize_metadata_keys(self, keys: List[str]) -> List[Identifier]:
-        sanitized_keys = []
-        for key in keys:
-            # Replace non-alphanumeric characters with underscores
-            # Ensure it starts with a letter or underscore
-            sanitized = ''.join(c if c.isalnum() or c == '_' else '_' for c in key)
-            if not sanitized or not (sanitized[0].isalpha() or sanitized[0] == '_'):
-                sanitized = '_' + sanitized
-            # Truncate to PostgreSQL's default max identifier length (63) if necessary
-            sanitized_keys.append(Identifier(sanitized[:63]))
-        return sanitized_keys
+    # Helper method to sanitize a single metadata key to a string
+    def _sanitize_key_to_str(self, key: str) -> str:
+        # Replace non-alphanumeric characters with underscores
+        # Ensure it starts with a letter or underscore
+        sanitized = ''.join(c if c.isalnum() or c == '_' else '_' for c in key)
+        if not sanitized or not (sanitized[0].isalpha() or sanitized[0] == '_'):
+            sanitized = '_' + sanitized
+        # Truncate to PostgreSQL's default max identifier length (63) if necessary
+        return sanitized[:63]
 
     # Helper method to sanitize the entire metadata schema dictionary
     def _sanitize_metadata_schema(self, schema: Dict[str, str]) -> Dict[str, str]:
         sanitized_schema = {}
         for key, value in schema.items():
-            # Replace non-alphanumeric characters with underscores
-            # Ensure it starts with a letter or underscore
-            sanitized_key = ''.join(c if c.isalnum() or c == '_' else '_' for c in key)
-            if not sanitized_key or not (sanitized_key[0].isalpha() or sanitized_key[0] == '_'):
-                sanitized_key = '_' + sanitized_key
-            # Truncate to PostgreSQL's default max identifier length (63) if necessary
+            # Reuse the single key sanitization logic
+            sanitized_key = self._sanitize_key_to_str(key)
             # We store the sanitized key string here, not the Identifier yet
-            sanitized_schema[sanitized_key[:63]] = value
+            sanitized_schema[sanitized_key] = value
         return sanitized_schema
