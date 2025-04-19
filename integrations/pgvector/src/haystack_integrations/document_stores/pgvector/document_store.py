@@ -541,7 +541,7 @@ class PgvectorDocumentStore:
         index_exists = bool(
             self._execute_sql(
                 sql_index_exists, # Use generic index check query
-                (self.schema_name, self.table_name, keyword_index_name.string), # Check for specific index name
+                (self.schema_name, self.table_name, str(keyword_index_name)), # Check for specific index name
                 "Could not check if keyword index exists",
             ).fetchone()
         )
@@ -553,14 +553,14 @@ class PgvectorDocumentStore:
             meta_index_exists = bool(
                 self._execute_sql(
                     sql_index_exists, # Use generic index check query
-                    (self.schema_name, self.table_name, index_name.string), # Check for specific index name
-                    f"Could not check if metadata index '{index_name.string}' exists",
+                    (self.schema_name, self.table_name, str(index_name)), # Check for specific index name
+                    f"Could not check if metadata index '{str(index_name)}' exists",
                 ).fetchone()
             )
             if not meta_index_exists:
-                self._execute_sql(sql_create_meta_index, error_msg=f"Could not create metadata index '{index_name.string}' on table")
+                self._execute_sql(sql_create_meta_index, error_msg=f"Could not create metadata index '{str(index_name)}' on table")
             else:
-                logger.info(f"Metadata index '{index_name.string}' already exists. Skipping creation.")
+                logger.info(f"Metadata index '{str(index_name)}' already exists. Skipping creation.")
 
         if self.search_strategy == "hnsw":
             self._handle_hnsw()
@@ -600,7 +600,7 @@ class PgvectorDocumentStore:
             await (
                 await self._execute_sql_async(
                     sql_index_exists, # Use generic index check query
-                    (self.schema_name, self.table_name, keyword_index_name.string), # Check for specific index name
+                    (self.schema_name, self.table_name, str(keyword_index_name)), # Check for specific index name
                     "Could not check if keyword index exists",
                      self._async_cursor,
                 )
@@ -615,16 +615,16 @@ class PgvectorDocumentStore:
                  await (
                     await self._execute_sql_async(
                         sql_index_exists, # Use generic index check query
-                        (self.schema_name, self.table_name, index_name.string), # Check for specific index name
-                        f"Could not check if metadata index '{index_name.string}' exists",
+                        (self.schema_name, self.table_name, str(index_name)), # Check for specific index name
+                        f"Could not check if metadata index '{str(index_name)}' exists",
                          self._async_cursor,
                     )
                 ).fetchone()
             )
             if not meta_index_exists:
-                 await self._execute_sql_async(sql_create_meta_index, error_msg=f"Could not create metadata index '{index_name.string}' on table")
+                 await self._execute_sql_async(sql_create_meta_index, error_msg=f"Could not create metadata index '{str(index_name)}' on table")
             else:
-                logger.info(f"Metadata index '{index_name.string}' already exists. Skipping creation.")
+                logger.info(f"Metadata index '{str(index_name)}' already exists. Skipping creation.")
 
 
         if self.search_strategy == "hnsw":
