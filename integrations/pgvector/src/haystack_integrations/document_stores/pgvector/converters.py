@@ -96,6 +96,9 @@ def _from_pg_to_haystack_documents(documents: List[Dict[str, Any]]) -> List[Docu
         blob_data = haystack_dict.pop("blob_data")
         blob_meta = haystack_dict.pop("blob_meta")
         blob_mime_type = haystack_dict.pop("blob_mime_type")
+        
+        # Remove generated content_fts field
+        haystack_dict.pop("content_fts")
 
         # convert the embedding to a list of floats
         if document.get("embedding") is not None:
